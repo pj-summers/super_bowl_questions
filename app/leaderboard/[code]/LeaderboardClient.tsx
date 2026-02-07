@@ -273,6 +273,13 @@ const computed = players.map((p) => {
         >
             Back to Game →
         </Link>
+        <Link
+          href="/champions"
+          className="rounded-xl border px-4 py-2 text-sm hover:bg-gray-50"
+        >
+          Past Champions →
+        </Link>
+
         {isAdmin && (
   <button
     onClick={async () => {
