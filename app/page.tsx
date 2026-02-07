@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
+import Link from "next/link";
 import { supabase } from "@/lib/supabaseClient";
 
 export default function Home() {
@@ -25,82 +26,70 @@ export default function Home() {
     setLoading(true);
 
     try {
-  // 1) Reuse existing session if present; otherwise create anonymous session
-  const { data: sessionData, error: sessionErr } = await supabase.auth.getSession();
-  if (sessionErr) throw sessionErr;
+      // 1) Ensure we have an anonymous session (for RLS + inserts)
+      const { data: sessionData, error: sessionErr } =
+        await supabase.auth.getSession();
+      if (sessionErr) throw sessionErr;
 
-  let userId = sessionData.session?.user?.id;
+      let userId = sessionData.session?.user?.id;
 
-  if (!userId) {
-    const { data: authData, error: authError } =
-      await supabase.auth.signInAnonymously();
-    if (authError) throw authError;
+      if (!userId) {
+        const { data: authData, error: authError } =
+          await supabase.auth.signInAnonymously();
+        if (authError) throw authError;
+        userId = authData.user?.id;
+      }
 
-    userId = authData.user?.id;
-  }
+      if (!userId) throw new Error("Could not create session.");
 
-  if (!userId) throw new Error("Could not create session.");
+      // 2) Look up the game by join code
+      const { data: game, error: gameError } = await supabase
+        .from("games")
+        .select("id, code, title, is_locked")
+        .eq("code", trimmedCode)
+        .single();
 
-  // Look up the game by join code
-  const { data: game, error: gameError } = await supabase
-    .from("games")
-    .select("id, code, title, is_locked")
-    .eq("code", trimmedCode)
-    .single();
+      if (gameError || !game) throw new Error("Invalid join code.");
+      if (game.is_locked) throw new Error("This game is locked.");
 
-  if (gameError || !game) throw new Error("Invalid join code.");
-  if (game.is_locked) throw new Error("This game is locked.");
+      // 3) If the name already exists for this game, just use it (any device)
+      const { data: existing, error: existingErr } = await supabase
+        .from("players")
+        .select("id")
+        .eq("game_id", game.id)
+        .ilike("display_name", trimmedName)
+        .maybeSingle();
 
-  const { data: existingName, error: nameErr } = await supabase
-  .from("players")
-  .select("id, user_id")
-  .eq("game_id", game.id)
-  .ilike("display_name", trimmedName)
-  .maybeSingle();
+      if (existingErr) throw existingErr;
 
-if (nameErr) throw nameErr;
+      // 4) If not existing, create it
+      if (!existing) {
+        const { error: insertErr } = await supabase.from("players").insert({
+          game_id: game.id,
+          user_id: userId, // stored but no longer used for access control
+          display_name: trimmedName,
+        });
 
-// If someone else already has this name, block it
-if (existingName && existingName.user_id !== userId) {
-  throw new Error("That name is already taken in this game. Try adding a last initial.");
-}
-  // 3) Check if the display name is already taken in this game
-const { data: existing, error: existingErr } = await supabase
-  .from("players")
-  .select("id, user_id")
-  .eq("game_id", game.id)
-  .ilike("display_name", trimmedName)
-  .maybeSingle();
+        // If two people race to create same name, unique index might throw.
+        // In that case, just proceed to game (name exists now).
+        if (insertErr) {
+          // If it's a unique violation, proceed; otherwise throw.
+          // Postgres unique violation is typically code "23505"
+          // Supabase error typing isn't perfect, so we check loosely.
+          const msg = String(insertErr.message ?? "");
+          if (!msg.toLowerCase().includes("duplicate") && !msg.includes("23505")) {
+            throw insertErr;
+          }
+        }
+      }
 
-if (existingErr) throw existingErr;
-
-if (existing) {
-  // Name exists already
-  if (existing.user_id !== userId) {
-    throw new Error(
-      "That name is already taken in this game. Try adding a last initial."
-    );
-  }
-  // Same device re-joining with same name -> allowed (no new row)
-} else {
-  // Name does not exist -> create new player row
-  const { error: insertErr } = await supabase.from("players").insert({
-    game_id: game.id,
-    user_id: userId,
-    display_name: trimmedName,
-  });
-
-  if (insertErr) throw insertErr;
-}
-
-// 4) Go to game (include name so we know which entry on this device)
-router.push(`/game/${trimmedCode}?name=${encodeURIComponent(trimmedName)}`);
-
-} catch (err: any) {
-  setError(err?.message ?? "Something went wrong.");
-} finally {
-  setLoading(false);
-}
+      // 5) Go to game (name in URL = identity)
+      router.push(`/game/${trimmedCode}?name=${encodeURIComponent(trimmedName)}`);
+    } catch (err: any) {
+      setError(err?.message ?? "Something went wrong.");
+    } finally {
+      setLoading(false);
+    }
   }
 
   return (
@@ -151,9 +140,12 @@ router.push(`/game/${trimmedCode}?name=${encodeURIComponent(trimmedName)}`);
           </button>
         </form>
 
-        <p className="mt-4 text-xs text-gray-500">
-          Anyone with the join code can play.
-        </p>
+        <div className="mt-4 flex items-center justify-between text-xs text-gray-500">
+          <span>Anyone with the join code can play.</span>
+          <Link className="underline" href="/champions">
+            Past champions
+          </Link>
+        </div>
       </div>
     </main>
   );

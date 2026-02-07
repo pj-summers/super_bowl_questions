@@ -85,9 +85,7 @@ if (playerError || !p) {
 }
 
 // Optional extra safety: if you want to ensure the same device owns it
-if (p.user_id !== userId) {
-  throw new Error("That name belongs to a different device/session. Re-join with a different name.");
-}
+
 
 setPlayer(p);
 
