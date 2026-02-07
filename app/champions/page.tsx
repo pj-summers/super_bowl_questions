@@ -59,9 +59,7 @@ const CHAMPIONS: Champion[] = [
 ];
 
 export default function ChampionsPage() {
-  const championsSorted = [...CHAMPIONS].sort((a, b) =>
-    b.year.localeCompare(a.year)
-  );
+  const championsSorted = CHAMPIONS;
 
   return (
     <main className="min-h-screen p-6 max-w-4xl mx-auto">
@@ -95,9 +93,9 @@ export default function ChampionsPage() {
         {/* Table Header */}
         <div className="grid grid-cols-12 bg-gray-50 px-4 py-3 text-xs font-semibold text-gray-600">
           <div className="col-span-2">Year</div>
-          <div className="col-span-5">Champion</div>
-          <div className="col-span-2 text-right">Correct</div>
-          <div className="col-span-3">Runner Up</div>
+          <div className="col-span-4">Champion</div>
+          <div className="col-span-2">Correct</div>
+          <div className="col-span-4">Runner Up</div>
         </div>
 
         {/* Table Rows */}
@@ -108,15 +106,15 @@ export default function ChampionsPage() {
           >
             <div className="col-span-2 font-mono">{c.year}</div>
 
-            <div className="col-span-5 font-medium leading-snug">
+            <div className="col-span-4 font-medium leading-snug">
               {c.name}
             </div>
 
-            <div className="col-span-2 text-right font-mono">
+            <div className="col-span-2 font-mono">
               {c.correct}
             </div>
 
-            <div className="col-span-3 text-sm text-gray-700 leading-snug">
+            <div className="col-span-4 text-sm text-gray-700 leading-snug">
               {c.runnerUp}
             </div>
           </div>
