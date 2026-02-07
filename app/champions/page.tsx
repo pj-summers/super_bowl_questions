@@ -98,19 +98,19 @@ export default function ChampionsPage() {
         {championsSorted.map((c) => (
             <div
                 key={c.year}
-                className="grid grid-cols-12 px-4 py-3 border-t"
+                className="grid grid-cols-12 px-4 py-3 border-t items-center"
             >
                 <div className="col-span-2 font-mono">{c.year}</div>
 
-                <div className="col-span-5">
-                    <div className="font-medium">{c.name}</div>
+                <div className="col-span-5 font-medium leading-snug">
+                    {c.name}
                 </div>
 
                 <div className="col-span-2 text-right font-mono">
                     {c.correct}
                 </div>
 
-                <div className="col-span-3 text-sm text-gray-700">
+                <div className="col-span-3 text-sm text-gray-700 leading-snug">
                     {c.runnerUp}
                 </div>
             </div>
