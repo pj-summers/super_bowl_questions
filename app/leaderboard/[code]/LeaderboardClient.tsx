@@ -146,6 +146,7 @@ export default function LeaderboardClient({ code }: { code: string }) {
       const correctCounts = new Map<string, number>();
 
       for (const a of answers) {
+        if (!answeredSets.has(a.player_id)) answeredSets.set(a.player_id, new Set());
         answeredSets.get(a.player_id)?.add(a.question_id);
 
         const correct = correctByQ.get(a.question_id);
