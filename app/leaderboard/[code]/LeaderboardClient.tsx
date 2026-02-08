@@ -310,40 +310,48 @@ const computed = players.map((p) => {
         </div>
       </div>
 
-      <div className="mt-6 rounded-2xl border overflow-hidden">
-  <div className="grid grid-cols-12 bg-gray-50 px-4 py-3 text-xs font-semibold text-gray-600">
-    <div className="col-span-4">Player</div>
-    <div className="col-span-2 text-right">Correct</div>
-    <div className="col-span-2 text-right">Accuracy</div>
-    <div className="col-span-2 text-right">Answered</div>
-    <div className="col-span-2 text-right">Complete</div>
-  </div>
-
-  {rows.length === 0 ? (
-    <div className="px-4 py-6 text-sm text-gray-600">No players yet.</div>
-  ) : (
-    rows.map((r, idx) => (
-      <div
-        key={r.player_id}
-        className="grid grid-cols-12 px-4 py-3 border-t"
-      >
-        <div className="col-span-4 flex items-center gap-3">
-          <div className="text-xs text-gray-500 w-6">{idx + 1}</div>
-          <div className="font-medium">{r.name}</div>
-        </div>
-
-        <div className="col-span-2 text-right font-mono">{r.correctOutOf}</div>
-
-        <div className="col-span-2 text-right font-mono">
-          {r.accuracyPct == null ? "-" : `${r.accuracyPct}%`}
-        </div>
-        
-        <div className="col-span-2 text-right font-mono">
-          {r.answered}/{totalQuestions}
-        </div>
-
-        <div className="col-span-2 text-right font-mono">{r.pct}%</div>
+  <div className="mt-6 rounded-2xl border overflow-hidden">
+  <div className="overflow-x-auto -mx-6 px-6">
+    <div className="min-w-[700px]">
+      <div className="grid grid-cols-12 bg-gray-50 px-4 py-3 text-xs font-semibold text-gray-600">
+        <div className="col-span-4">Player</div>
+        <div className="col-span-2 text-right">Correct</div>
+        <div className="col-span-2 text-right">Accuracy</div>
+        <div className="col-span-2 text-right">Answered</div>
+        <div className="col-span-2 text-right">Complete</div>
       </div>
-    ))
-  )}
-</div></main>)}
+
+      {rows.length === 0 ? (
+        <div className="px-4 py-6 text-sm text-gray-600">No players yet.</div>
+      ) : (
+        rows.map((r, idx) => (
+          <div
+            key={r.player_id}
+            className="grid grid-cols-12 px-4 py-3 border-t"
+          >
+            <div className="col-span-4 flex items-center gap-3">
+              <div className="text-xs text-gray-500 w-6">{idx + 1}</div>
+              <div className="font-medium">{r.name}</div>
+            </div>
+
+            <div className="col-span-2 text-right font-mono">
+              {r.correctOutOf}
+            </div>
+
+            <div className="col-span-2 text-right font-mono">
+              {r.accuracyPct == null ? "—" : `${r.accuracyPct}%`}
+            </div>
+
+            <div className="col-span-2 text-right font-mono">
+              {r.answered}/{totalQuestions}
+            </div>
+
+            <div className="col-span-2 text-right font-mono">{r.pct}%</div>
+          </div>
+        ))
+      )}
+    </div>
+  </div>
+</div>
+
+</main>)}
