@@ -126,13 +126,29 @@ export default function LeaderboardClient({ code }: { code: string }) {
 
       let answers: AnswerRow[] = [];
       if (qIds.length > 0) {
-        const { data: as, error: aErr } = await supabase
-          .from("answers")
-          .select("player_id, question_id, option")
-          .in("question_id", qIds);
+        const PAGE_SIZE = 1000;
+let allAnswers: any[] = [];
+let from = 0;
 
-        if (aErr) throw aErr;
-        answers = as ?? [];
+while (true) {
+  const { data: page, error: pageErr } = await supabase
+    .from("answers")
+    .select("player_id, question_id, option")
+    .in("question_id", qIds)
+    .order("player_id", { ascending: true })
+    .order("question_id", { ascending: true })
+    .range(from, from + PAGE_SIZE - 1);
+
+  if (pageErr) throw pageErr;
+
+  allAnswers = allAnswers.concat(page ?? []);
+
+  if (!page || page.length < PAGE_SIZE) break;
+  from += PAGE_SIZE;
+}
+
+const answers = allAnswers;
+
       }
 
       const correctByQ = new Map<string, string>();
