@@ -51,6 +51,8 @@ export default function LeaderboardClient({ code }: { code: string }) {
       name: string;
       answered: number;
       correct: number;
+      correctOutOf: string;
+      accuracyPct: number | null;
       pct: number;
     }>
   >([]);
@@ -156,9 +158,18 @@ export default function LeaderboardClient({ code }: { code: string }) {
 const computed = players.map((p) => {
   const answered = answeredSets.get(p.id)?.size ?? 0;
   const correct = correctCounts.get(p.id) ?? 0;
-  const pct = qCount > 0 ? Math.round((answered / qCount) * 100) : 0;
+  const completionPct = qCount > 0 ? Math.round((answered / qCount) * 100) : 0;
+  const accuracyPct = answered > 0 ? Math.round((correct / answered) * 100) : null;
 
-  return { player_id: p.id, name: p.display_name, answered, correct, pct };
+  return { 
+    player_id: p.id, 
+    name: p.display_name, 
+    answered, 
+    correct, 
+    correctOutOf: `${correct}/${answered}`,
+    accuracyPct,
+    pct: completionPct
+  };
 });
 
 
@@ -301,10 +312,11 @@ const computed = players.map((p) => {
 
       <div className="mt-6 rounded-2xl border overflow-hidden">
   <div className="grid grid-cols-12 bg-gray-50 px-4 py-3 text-xs font-semibold text-gray-600">
-    <div className="col-span-5">Player</div>
+    <div className="col-span-4">Player</div>
     <div className="col-span-2 text-right">Correct</div>
-    <div className="col-span-3 text-right">Answered</div>
-    <div className="col-span-2 text-right">%</div>
+    <div className="col-span-2 text-right">Accuracy</div>
+    <div className="col-span-2 text-right">Answered</div>
+    <div className="col-span-2 text-right">Complete</div>
   </div>
 
   {rows.length === 0 ? (
@@ -315,14 +327,18 @@ const computed = players.map((p) => {
         key={r.player_id}
         className="grid grid-cols-12 px-4 py-3 border-t"
       >
-        <div className="col-span-5 flex items-center gap-3">
+        <div className="col-span-4 flex items-center gap-3">
           <div className="text-xs text-gray-500 w-6">{idx + 1}</div>
           <div className="font-medium">{r.name}</div>
         </div>
 
-        <div className="col-span-2 text-right font-mono">{r.correct}</div>
+        <div className="col-span-2 text-right font-mono">{r.correctOutOf}</div>
 
-        <div className="col-span-3 text-right font-mono">
+        <div className="col-span-2 text-right font-mono">
+          {r.accuracyPct == null ? "-" : `${r.accuracyPct}%`}
+        </div>
+        
+        <div className="col-span-2 text-right font-mono">
           {r.answered}/{totalQuestions}
         </div>
 
