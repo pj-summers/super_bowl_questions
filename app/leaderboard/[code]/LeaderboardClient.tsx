@@ -154,19 +154,19 @@ export default function LeaderboardClient({ code }: { code: string }) {
             correctCounts.set(a.player_id, (correctCounts.get(a.player_id) ?? 0) + 1);
         }
       }
-
+const scoredSoFar = correctSetCount;
 const computed = players.map((p) => {
   const answered = answeredSets.get(p.id)?.size ?? 0;
   const correct = correctCounts.get(p.id) ?? 0;
   const completionPct = qCount > 0 ? Math.round((answered / qCount) * 100) : 0;
-  const accuracyPct = answered > 0 ? Math.round((correct / answered) * 100) : null;
+  const accuracyPct = scoredSoFar > 0 ? Math.round((correct / answered) * 100) : null;
 
   return { 
     player_id: p.id, 
     name: p.display_name, 
     answered, 
     correct, 
-    correctOutOf: `${correct}/${answered}`,
+    correctOutOf: `${correct}/${scoredSoFar}`,
     accuracyPct,
     pct: completionPct
   };
