@@ -5,7 +5,6 @@ import Link from "next/link";
 import { supabase } from "@/lib/supabaseClient";
 import { useSearchParams } from "next/navigation";
 
-
 type GameRow = {
   id: string;
   code: string;
@@ -26,7 +25,7 @@ type QuestionRow = {
 type AnswerRow = {
   player_id: string;
   question_id: string;
-  option: string;
+  option: string | null;
 };
 
 export default function LeaderboardClient({ code }: { code: string }) {
@@ -44,7 +43,6 @@ export default function LeaderboardClient({ code }: { code: string }) {
   const adminKey = searchParams.get("key") ?? "";
   const isAdmin = adminKey.length > 0;
 
-
   const [rows, setRows] = useState<
     Array<{
       player_id: string;
@@ -56,27 +54,53 @@ export default function LeaderboardClient({ code }: { code: string }) {
       pct: number;
     }>
   >([]);
+
   async function setLocked(nextLocked: boolean) {
-  if (!game) return;
+    if (!game) return;
 
-  const res = await fetch("/api/admin/lock", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      code: game.code,
-      locked: nextLocked,
-      key: adminKey,
-    }),
-  });
+    const res = await fetch("/api/admin/lock", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        code: game.code,
+        locked: nextLocked,
+        key: adminKey,
+      }),
+    });
 
-  const json = await res.json();
-  if (!res.ok) {
-    throw new Error(json?.error ?? "Failed to update lock.");
+    const json = await res.json();
+    if (!res.ok) throw new Error(json?.error ?? "Failed to update lock.");
+
+    await refresh();
   }
 
-  // Pull fresh state
-  await refresh();
-}
+  async function fetchAllAnswers(qIds: string[]): Promise<AnswerRow[]> {
+    if (qIds.length === 0) return [];
+
+    const PAGE_SIZE = 1000;
+    let all: AnswerRow[] = [];
+    let from = 0;
+
+    while (true) {
+      const { data: page, error: pageErr } = await supabase
+        .from("answers")
+        .select("player_id, question_id, option")
+        .in("question_id", qIds)
+        .order("player_id", { ascending: true })
+        .order("question_id", { ascending: true })
+        .range(from, from + PAGE_SIZE - 1);
+
+      if (pageErr) throw pageErr;
+
+      const pageRows = (page ?? []) as AnswerRow[];
+      all = all.concat(pageRows);
+
+      if (pageRows.length < PAGE_SIZE) break;
+      from += PAGE_SIZE;
+    }
+
+    return all;
+  }
 
   async function refresh() {
     setError(null);
@@ -92,21 +116,24 @@ export default function LeaderboardClient({ code }: { code: string }) {
       if (gErr || !g) throw new Error("Game not found.");
       setGame(g);
 
-      // 2) Load total questions (for progress denominator)
+      // 2) Load questions
       const { data: qs, error: qErr } = await supabase
         .from("questions")
         .select("id, correct_option")
         .eq("game_id", g.id);
 
       if (qErr) throw qErr;
-      const qCount = (qs ?? []).length;
+
+      const questions = (qs ?? []) as QuestionRow[];
+      const qCount = questions.length;
       setTotalQuestions(qCount);
 
-      const qList: any[] = qs ?? [];
-
-      const correctSetCount = qList.filter((q) => q.correct_option != null && String(q.correct_option).trim() !== "").length;
+      const correctSetCount = questions.filter(
+        (q) => q.correct_option != null && String(q.correct_option).trim() !== ""
+      ).length;
       setNumCorrectSet(correctSetCount);
 
+      const qIds = questions.map((q) => q.id);
 
       // 3) Load players
       const { data: ps, error: pErr } = await supabase
@@ -116,80 +143,55 @@ export default function LeaderboardClient({ code }: { code: string }) {
         .order("created_at", { ascending: true });
 
       if (pErr) throw pErr;
+      const players = (ps ?? []) as PlayerRow[];
 
-      const players: PlayerRow[] = ps ?? [];
+      // 4) Load answers (paged to avoid 1000 row limit)
+      const answers = await fetchAllAnswers(qIds);
 
-      // 4) Load all answers (for this game's questions)
-      // We can’t filter answers directly by game_id without a join,
-      // so we fetch by question_ids (small scale = totally fine).
-      const qIds = (qs ?? []).map((q: QuestionRow) => q.id);
-
-      let answers: AnswerRow[] = [];
-      if (qIds.length > 0) {
-        const PAGE_SIZE = 1000;
-let allAnswers: any[] = [];
-let from = 0;
-
-while (true) {
-  const { data: page, error: pageErr } = await supabase
-    .from("answers")
-    .select("player_id, question_id, option")
-    .in("question_id", qIds)
-    .order("player_id", { ascending: true })
-    .order("question_id", { ascending: true })
-    .range(from, from + PAGE_SIZE - 1);
-
-  if (pageErr) throw pageErr;
-
-  allAnswers = allAnswers.concat(page ?? []);
-
-  if (!page || page.length < PAGE_SIZE) break;
-  from += PAGE_SIZE;
-}
-
-const answers = allAnswers;
-
+      // Map of correct answers by question
+      const correctByQ = new Map<string, string>();
+      for (const q of questions) {
+        if (q.correct_option && String(q.correct_option).trim() !== "") {
+          correctByQ.set(q.id, q.correct_option);
+        }
       }
 
-      const correctByQ = new Map<string, string>();
-      (qs ?? []).forEach((q: any) => {
-        if (q.correct_option) correctByQ.set(q.id, q.correct_option);
-      });
-
-
-      // Track answered questions and correct count per player
+      // Count answered + correct per player
       const answeredSets = new Map<string, Set<string>>();
       const correctCounts = new Map<string, number>();
 
       for (const a of answers) {
         if (!answeredSets.has(a.player_id)) answeredSets.set(a.player_id, new Set());
-        answeredSets.get(a.player_id)?.add(a.question_id);
+        answeredSets.get(a.player_id)!.add(a.question_id);
 
         const correct = correctByQ.get(a.question_id);
         if (correct && a.option === correct) {
-            correctCounts.set(a.player_id, (correctCounts.get(a.player_id) ?? 0) + 1);
+          correctCounts.set(a.player_id, (correctCounts.get(a.player_id) ?? 0) + 1);
         }
       }
-const scoredSoFar = correctSetCount;
-const computed = players.map((p) => {
-  const answered = answeredSets.get(p.id)?.size ?? 0;
-  const correct = correctCounts.get(p.id) ?? 0;
-  const completionPct = qCount > 0 ? Math.round((answered / qCount) * 100) : 0;
-  const accuracyPct = scoredSoFar > 0 ? Math.round((correct / answered) * 100) : null;
 
-  return { 
-    player_id: p.id, 
-    name: p.display_name, 
-    answered, 
-    correct, 
-    correctOutOf: `${correct}/${scoredSoFar}`,
-    accuracyPct,
-    pct: completionPct
-  };
-});
+      const scoredSoFar = correctSetCount;
 
+      const computed = players.map((p) => {
+        const answered = answeredSets.get(p.id)?.size ?? 0;
+        const correct = correctCounts.get(p.id) ?? 0;
 
-      // Sort: most answered first, then name
+        const completionPct = qCount > 0 ? Math.round((answered / qCount) * 100) : 0;
+        const accuracyPct =
+          scoredSoFar > 0 ? Math.round((correct / scoredSoFar) * 100) : null;
+
+        return {
+          player_id: p.id,
+          name: p.display_name,
+          answered,
+          correct,
+          correctOutOf: `${correct}/${scoredSoFar}`,
+          accuracyPct,
+          pct: completionPct,
+        };
+      });
+
+      // Sort: score desc, then answered desc, then name
       computed.sort((a, b) => {
         if (b.correct !== a.correct) return b.correct - a.correct;
         if (b.answered !== a.answered) return b.answered - a.answered;
@@ -213,24 +215,16 @@ const computed = players.map((p) => {
 
   // Realtime updates
   useEffect(() => {
-    // Any answer/player change triggers refresh.
-    // (For your group size, this is totally fine.)
     const channel = supabase
       .channel(`leaderboard-${joinCode}`)
-      .on(
-        "postgres_changes",
-        { event: "*", schema: "public", table: "answers" },
-        () => refresh()
+      .on("postgres_changes", { event: "*", schema: "public", table: "answers" }, () =>
+        refresh()
       )
-      .on(
-        "postgres_changes",
-        { event: "*", schema: "public", table: "players" },
-        () => refresh()
+      .on("postgres_changes", { event: "*", schema: "public", table: "players" }, () =>
+        refresh()
       )
-      .on(
-        "postgres_changes",
-        { event: "*", schema: "public", table: "questions" },
-        () => refresh()
+      .on("postgres_changes", { event: "*", schema: "public", table: "questions" }, () =>
+        refresh()
       )
       .subscribe();
 
@@ -275,9 +269,7 @@ const computed = players.map((p) => {
             {game.title} · Code: <span className="font-mono">{game.code}</span>
             {game.is_locked ? " · Locked" : ""}
           </p>
-          <p className="mt-1 text-sm text-gray-600">
-            Total questions: {totalQuestions}
-          </p>
+          <p className="mt-1 text-sm text-gray-600">Total questions: {totalQuestions}</p>
           <p className="mt-1 text-sm text-gray-600">
             Correct answers entered: {numCorrectSet}/{totalQuestions}
           </p>
@@ -290,84 +282,83 @@ const computed = players.map((p) => {
           >
             Refresh
           </button>
+
           <Link
             href={
-                displayName
-                    ? `/game/${game.code}?name=${encodeURIComponent(displayName)}`
-                    : `/`
+              displayName
+                ? `/game/${game.code}?name=${encodeURIComponent(displayName)}`
+                : `/`
             }
             className="rounded-xl border px-4 py-2 text-sm hover:bg-gray-50"
-        >
+          >
             Back to Game →
-        </Link>
-        <Link
-          href="/champions"
-          className="rounded-xl border px-4 py-2 text-sm hover:bg-gray-50"
-        >
-          Past Champions →
-        </Link>
+          </Link>
 
-        {isAdmin && (
-  <button
-    onClick={async () => {
-      try {
-        await setLocked(!game.is_locked);
-      } catch (e: any) {
-        setError(e?.message ?? "Failed to update lock.");
-      }
-    }}
-    className="rounded-xl border px-4 py-2 text-sm hover:bg-gray-50"
-  >
-    {game.is_locked ? "Unlock Submissions" : "Lock Submissions"}
-  </button>
-)}
+          <Link
+            href="/champions"
+            className="rounded-xl border px-4 py-2 text-sm hover:bg-gray-50"
+          >
+            Past Champions →
+          </Link>
 
-
+          {isAdmin && (
+            <button
+              onClick={async () => {
+                try {
+                  await setLocked(!game.is_locked);
+                } catch (e: any) {
+                  setError(e?.message ?? "Failed to update lock.");
+                }
+              }}
+              className="rounded-xl border px-4 py-2 text-sm hover:bg-gray-50"
+            >
+              {game.is_locked ? "Unlock Submissions" : "Lock Submissions"}
+            </button>
+          )}
         </div>
       </div>
 
-  <div className="mt-6 rounded-2xl border overflow-hidden">
-  <div className="overflow-x-auto -mx-6 px-6">
-    <div className="min-w-[700px]">
-      <div className="grid grid-cols-12 bg-gray-50 px-4 py-3 text-xs font-semibold text-gray-600">
-        <div className="col-span-4">Player</div>
-        <div className="col-span-2 text-right">Correct</div>
-        <div className="col-span-2 text-right">Accuracy</div>
-        <div className="col-span-2 text-right">Answered</div>
-        <div className="col-span-2 text-right">Complete</div>
+      <div className="mt-6 rounded-2xl border overflow-hidden">
+        <div className="overflow-x-auto -mx-6 px-6">
+          <div className="min-w-[700px]"
+          >
+            <div className="grid grid-cols-12 bg-gray-50 px-4 py-3 text-xs font-semibold text-gray-600">
+              <div className="col-span-4">Player</div>
+              <div className="col-span-2 text-right">Correct</div>
+              <div className="col-span-2 text-right">Accuracy</div>
+              <div className="col-span-2 text-right">Answered</div>
+              <div className="col-span-2 text-right">Complete</div>
+            </div>
+
+            {rows.length === 0 ? (
+              <div className="px-4 py-6 text-sm text-gray-600">No players yet.</div>
+            ) : (
+              rows.map((r, idx) => (
+                <div key={r.player_id} className="grid grid-cols-12 px-4 py-3 border-t">
+                  <div className="col-span-4 flex items-center gap-3">
+                    <div className="text-xs text-gray-500 w-6">{idx + 1}</div>
+                    <div className="font-medium">{r.name}</div>
+                  </div>
+
+                  <div className="col-span-2 text-right font-mono">{r.correctOutOf}</div>
+
+                  <div className="col-span-2 text-right font-mono">
+                    {r.accuracyPct == null ? "—" : `${r.accuracyPct}%`}
+                  </div>
+
+                  <div className="col-span-2 text-right font-mono">
+                    {r.answered}/{totalQuestions}
+                  </div>
+
+                  <div className="col-span-2 text-right font-mono">{r.pct}%</div>
+                </div>
+              ))
+            )}
+          </div>
+        </div>
       </div>
 
-      {rows.length === 0 ? (
-        <div className="px-4 py-6 text-sm text-gray-600">No players yet.</div>
-      ) : (
-        rows.map((r, idx) => (
-          <div
-            key={r.player_id}
-            className="grid grid-cols-12 px-4 py-3 border-t"
-          >
-            <div className="col-span-4 flex items-center gap-3">
-              <div className="text-xs text-gray-500 w-6">{idx + 1}</div>
-              <div className="font-medium">{r.name}</div>
-            </div>
-
-            <div className="col-span-2 text-right font-mono">
-              {r.correctOutOf}
-            </div>
-
-            <div className="col-span-2 text-right font-mono">
-              {r.accuracyPct == null ? "—" : `${r.accuracyPct}%`}
-            </div>
-
-            <div className="col-span-2 text-right font-mono">
-              {r.answered}/{totalQuestions}
-            </div>
-
-            <div className="col-span-2 text-right font-mono">{r.pct}%</div>
-          </div>
-        ))
-      )}
-    </div>
-  </div>
-</div>
-
-</main>)}
+      <p className="mt-6 text-xs text-gray-500">Updates live as people submit answers.</p>
+    </main>
+  );
+}
