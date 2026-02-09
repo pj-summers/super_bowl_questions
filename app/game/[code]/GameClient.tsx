@@ -229,7 +229,7 @@ setPlayer(p);
 
       {game.is_locked && (
         <div className="mt-4 rounded-xl border bg-yellow-50 p-3 text-sm">
-          This game is locked. Answers can’t be changed.
+          Submissions are locked — you can view your picks but can’t change them.
         </div>
       )}
 

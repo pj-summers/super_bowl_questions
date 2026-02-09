@@ -50,7 +50,6 @@ export default function Home() {
         .single();
 
       if (gameError || !game) throw new Error("Invalid join code.");
-      if (game.is_locked) throw new Error("This game is locked.");
 
       // 3) If the name already exists for this game, just use it (any device)
       const { data: existing, error: existingErr } = await supabase
