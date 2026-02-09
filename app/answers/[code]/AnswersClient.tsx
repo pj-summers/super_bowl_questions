@@ -367,7 +367,7 @@ export default function AnswersClient({ code }: { code: string }) {
                   {questions.map((q, idx) => (
                     <th
                       key={q.id}
-                      className="border-b px-3 py-2 text-left whitespace-nowrap"
+                      className="border-b px-3 py-2 text-left whitespace-nowrap cursor-help"
                       title={q.prompt}
                     >
                       Q{idx + 1}
@@ -421,7 +421,7 @@ export default function AnswersClient({ code }: { code: string }) {
                     return (
                       <th
                         key={p.id}
-                        className="border-b px-3 py-2 text-left whitespace-nowrap"
+                        className="border-b px-3 py-2 text-left whitespace-nowrap cursor-help"
                         title={`${p.display_name} — Score ${s.correct}/${scoredSoFar || 0}`}
                       >
                         <div className="font-semibold">{label}</div>
