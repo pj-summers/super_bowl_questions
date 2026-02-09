@@ -9,6 +9,12 @@ type Champion = {
 
 const CHAMPIONS: Champion[] = [
   {
+    year: "LX",
+    name: "Del Tolley",
+    correct: 21,
+    runnerUp: "Kent Zinn",
+  },  
+  {
     year: "LIX",
     name: "Tommy Girsch",
     correct: 20,
