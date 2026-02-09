@@ -300,6 +300,14 @@ export default function LeaderboardClient({ code }: { code: string }) {
           >
             Past Champions →
           </Link>
+          {game.is_locked && (
+            <Link
+              href={`/answers/${game.code}`}
+              className="rounded-xl border px-4 py-2 text-sm hover:bg-gray-50"
+            >
+              Everyone’s Answers →
+            </Link>
+          )}
 
           {isAdmin && (
             <button
