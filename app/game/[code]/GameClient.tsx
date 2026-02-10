@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { supabase } from "@/lib/supabaseClient";
-import { useSearchParams } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 
 type GameRow = {
   id: string;
@@ -43,6 +43,7 @@ export default function GameClient({ code }: { code: string }) {
   const [questions, setQuestions] = useState<QuestionRow[]>([]);
   const [answers, setAnswers] = useState<Record<string, string>>({});
   const searchParams = useSearchParams();
+  const router = useRouter();
   const displayName = (searchParams.get("name") ?? "").trim();
 
 
@@ -133,6 +134,17 @@ setPlayer(p);
 
   useEffect(() => {
   if (!joinCode) return;
+  window.localStorage.setItem("sbq:lastCode", code.toUpperCase());
+
+  const currentName = searchParams.get("name");
+  if (!currentName) {
+    const savedName = window.localStorage.getItem("sbq:lastName");
+    if (savedName) {
+      router.replace(`/game/${code.toUpperCase()}?name=${encodeURIComponent(savedName)}`);
+    }
+  } else{
+    window.localStorage.setItem("sbq:lastName", currentName);
+  }
 
   const channel = supabase
     .channel(`game-lock-${joinCode}`)
@@ -149,7 +161,7 @@ setPlayer(p);
   return () => {
     supabase.removeChannel(channel);
   };
-}, [joinCode]);
+}, [code, router, searchParams]);
 
 
   async function saveAnswer(questionId: string, option: string) {
@@ -229,7 +241,7 @@ setPlayer(p);
 
       {game.is_locked && (
         <div className="mt-4 rounded-xl border bg-yellow-50 p-3 text-sm">
-          Submissions are locked — you can view your picks but can’t change them.
+          This game is locked. Answers can’t be changed.
         </div>
       )}
 

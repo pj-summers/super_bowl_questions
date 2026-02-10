@@ -83,6 +83,8 @@ export default function Home() {
       }
 
       // 5) Go to game (name in URL = identity)
+      window.localStorage.setItem("sbq:lastCode", trimmedCode);
+      window.localStorage.setItem("sbq:lastName", trimmedName);
       router.push(`/game/${trimmedCode}?name=${encodeURIComponent(trimmedName)}`);
     } catch (err: any) {
       setError(err?.message ?? "Something went wrong.");
