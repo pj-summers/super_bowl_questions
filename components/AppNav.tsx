@@ -81,7 +81,7 @@ export default function AppNav() {
     <header className="sticky top-0 z-50 border-b bg-white/80 backdrop-blur">
       <div className="mx-auto max-w-6xl px-4 py-3 flex items-center justify-between gap-4">
         <div className="flex items-center gap-3 min-w-0">
-          <div className="h-9 w-9 rounded-xl border flex items-center justify-center font-semibold">
+          <div className="h-9 w-9 rounded-xl bg-brand text-brand-foreground flex items-center justify-center font-semibold">
             SB
           </div>
 
@@ -124,7 +124,7 @@ export default function AppNav() {
                 href={item.href}
                 className={cn(
                   "whitespace-nowrap rounded-xl px-3 py-2 text-sm border hover:bg-gray-50",
-                  active && "bg-gray-50"
+                  active && "border-brand bg-brand/10"
                 )}
               >
                 {item.label}

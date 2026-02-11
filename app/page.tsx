@@ -135,7 +135,7 @@ export default function Home() {
           <button
             type="submit"
             disabled={loading}
-            className="w-full rounded-xl bg-black px-4 py-2 text-white disabled:opacity-60"
+            className="w-full rounded-xl bg-brand px-4 py-2 text-brand-foreground hover:opacity-90 disabled:opacity-60"
           >
             {loading ? "Joining..." : "Join Game"}
           </button>
