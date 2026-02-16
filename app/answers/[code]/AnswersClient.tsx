@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { supabase } from "@/lib/supabaseClient";
+import StatCard from "@/components/StatCard";
 
 type GameRow = {
   id: string;
@@ -223,7 +224,6 @@ export default function AnswersClient({ code }: { code: string }) {
         continue;
       }
 
-      // collision: add a counter suffix
       const n = (used.get(base) ?? 0) + 1;
       used.set(base, n);
       labels.set(p.id, `${base} (${n})`);
@@ -252,23 +252,18 @@ export default function AnswersClient({ code }: { code: string }) {
   function getCellClass(questionId: string, value: string) {
     const q = questions.find((qq) => qq.id === questionId);
     const correctOpt = q?.correct_option == null ? "" : String(q.correct_option).trim();
-
     const v = (value ?? "").trim();
 
-    // no correct entered yet
-    if (!correctOpt) return "bg-white";
+    if (!correctOpt) return "bg-white"; // not scored yet
+    if (!v) return "bg-white"; // unanswered
 
-    // unanswered
-    if (!v) return "bg-white";
-
-    // correct / incorrect
     if (v === correctOpt) return "bg-green-50";
     return "bg-red-50";
   }
 
   if (loading) {
     return (
-      <main className="min-h-screen p-6 flex items-center justify-center">
+      <main className="min-h-screen flex items-center justify-center">
         <p>Loading answers…</p>
       </main>
     );
@@ -276,7 +271,7 @@ export default function AnswersClient({ code }: { code: string }) {
 
   if (error) {
     return (
-      <main className="min-h-screen p-6 max-w-2xl mx-auto">
+      <main className="min-h-screen max-w-2xl mx-auto">
         <h1 className="text-2xl font-semibold">Everyone’s Answers</h1>
         <div className="mt-4 rounded-xl border border-red-300 bg-red-50 p-3 text-sm text-red-700">
           {error}
@@ -294,7 +289,7 @@ export default function AnswersClient({ code }: { code: string }) {
 
   if (!game.is_locked) {
     return (
-      <main className="min-h-screen p-6 max-w-2xl mx-auto">
+      <main className="min-h-screen max-w-2xl mx-auto">
         <h1 className="text-2xl font-semibold">Everyone’s Answers</h1>
         <p className="mt-2 text-sm text-gray-600">
           This page becomes available after submissions are locked.
@@ -317,7 +312,8 @@ export default function AnswersClient({ code }: { code: string }) {
   const totalQuestions = questions.length;
 
   return (
-    <main className="min-h-screen p-6 max-w-6xl mx-auto">
+    <main className="min-h-screen max-w-6xl mx-auto">
+      {/* Title Row */}
       <div className="flex items-start justify-between gap-4">
         <div>
           <h1 className="text-2xl font-semibold">Everyone’s Answers</h1>
@@ -325,10 +321,7 @@ export default function AnswersClient({ code }: { code: string }) {
             {game.title} · Code: <span className="font-mono">{game.code}</span> · Locked
           </p>
           <p className="mt-1 text-xs text-gray-500">
-            Scored so far: {scoredSoFar}/{totalQuestions} · Green = correct, red = incorrect
-          </p>
-          <p className="mt-1 text-xs text-gray-500">
-            Tip: swipe left/right on mobile.
+            Green = correct, red = incorrect (only for scored questions)
           </p>
         </div>
 
@@ -353,11 +346,28 @@ export default function AnswersClient({ code }: { code: string }) {
         </div>
       </div>
 
+      {/* Stat Cards */}
+      <div className="mt-6 grid grid-cols-2 gap-3 sm:grid-cols-4">
+        <StatCard label="Players" value={players.length} />
+        <StatCard label="Questions" value={questions.length} />
+        <StatCard label="Scored" value={`${scoredSoFar}/${questions.length}`} />
+        <StatCard
+          label="Status"
+          value={
+            <span className="text-gray-800">
+              Locked
+            </span>
+          }
+          sub={
+            view === "players" ? "Players × Questions" : "Questions × Players"
+          }
+        />
+      </div>
+
       {/* TABLE */}
-      <div className="mt-6 rounded-2xl border overflow-hidden">
+      <div className="mt-6 rounded-2xl border overflow-hidden bg-white shadow-sm">
         <div className="overflow-x-auto">
           {view === "players" ? (
-            // Players = rows, Questions = columns (original)
             <table className="w-full border-collapse text-sm min-w-[900px]">
               <thead>
                 <tr className="bg-gray-50 text-xs font-semibold text-gray-600">
@@ -367,7 +377,7 @@ export default function AnswersClient({ code }: { code: string }) {
                   {questions.map((q, idx) => (
                     <th
                       key={q.id}
-                      className="border-b px-3 py-2 text-left whitespace-nowrap cursor-help"
+                      className="border-b px-3 py-2 text-left whitespace-nowrap"
                       title={q.prompt}
                     >
                       Q{idx + 1}
@@ -407,7 +417,6 @@ export default function AnswersClient({ code }: { code: string }) {
               </tbody>
             </table>
           ) : (
-            // Questions = rows, Players = columns (flipped + ordered by score)
             <table className="w-full border-collapse text-sm min-w-[1100px]">
               <thead>
                 <tr className="bg-gray-50 text-xs font-semibold text-gray-600">
@@ -421,7 +430,7 @@ export default function AnswersClient({ code }: { code: string }) {
                     return (
                       <th
                         key={p.id}
-                        className="border-b px-3 py-2 text-left whitespace-nowrap cursor-help"
+                        className="border-b px-3 py-2 text-left whitespace-nowrap"
                         title={`${p.display_name} — Score ${s.correct}/${scoredSoFar || 0}`}
                       >
                         <div className="font-semibold">{label}</div>
@@ -437,10 +446,7 @@ export default function AnswersClient({ code }: { code: string }) {
               <tbody>
                 {questions.map((q, idx) => (
                   <tr key={q.id} className="border-t">
-                    <td
-                      className="sticky left-0 z-10 bg-white border-r px-3 py-2 align-top"
-                      title={q.prompt}
-                    >
+                    <td className="sticky left-0 z-10 bg-white border-r px-3 py-2 align-top" title={q.prompt}>
                       <div className="font-medium whitespace-nowrap">Q{idx + 1}</div>
                       <div className="mt-0.5 text-xs text-gray-600 leading-snug max-w-[340px]">
                         {q.prompt}
@@ -478,6 +484,10 @@ export default function AnswersClient({ code }: { code: string }) {
           )}
         </div>
       </div>
+
+      <p className="mt-6 text-xs text-gray-500">
+        Tip: swipe left/right on mobile to view all columns.
+      </p>
     </main>
   );
 }

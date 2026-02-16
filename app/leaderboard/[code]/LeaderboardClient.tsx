@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { supabase } from "@/lib/supabaseClient";
 import { useSearchParams } from "next/navigation";
+import StatCard from "@/components/StatCard";
 
 type GameRow = {
   id: string;
@@ -27,6 +28,34 @@ type AnswerRow = {
   question_id: string;
   option: string | null;
 };
+
+async function fetchAllAnswers(qIds: string[]): Promise<AnswerRow[]> {
+  if (qIds.length === 0) return [];
+
+  const PAGE_SIZE = 1000;
+  let all: AnswerRow[] = [];
+  let from = 0;
+
+  while (true) {
+    const { data: page, error: pageErr } = await supabase
+      .from("answers")
+      .select("player_id, question_id, option")
+      .in("question_id", qIds)
+      .order("player_id", { ascending: true })
+      .order("question_id", { ascending: true })
+      .range(from, from + PAGE_SIZE - 1);
+
+    if (pageErr) throw pageErr;
+
+    const rows = (page ?? []) as AnswerRow[];
+    all = all.concat(rows);
+
+    if (rows.length < PAGE_SIZE) break;
+    from += PAGE_SIZE;
+  }
+
+  return all;
+}
 
 export default function LeaderboardClient({ code }: { code: string }) {
   const joinCode = useMemo(() => code.toUpperCase(), [code]);
@@ -74,34 +103,6 @@ export default function LeaderboardClient({ code }: { code: string }) {
     await refresh();
   }
 
-  async function fetchAllAnswers(qIds: string[]): Promise<AnswerRow[]> {
-    if (qIds.length === 0) return [];
-
-    const PAGE_SIZE = 1000;
-    let all: AnswerRow[] = [];
-    let from = 0;
-
-    while (true) {
-      const { data: page, error: pageErr } = await supabase
-        .from("answers")
-        .select("player_id, question_id, option")
-        .in("question_id", qIds)
-        .order("player_id", { ascending: true })
-        .order("question_id", { ascending: true })
-        .range(from, from + PAGE_SIZE - 1);
-
-      if (pageErr) throw pageErr;
-
-      const pageRows = (page ?? []) as AnswerRow[];
-      all = all.concat(pageRows);
-
-      if (pageRows.length < PAGE_SIZE) break;
-      from += PAGE_SIZE;
-    }
-
-    return all;
-  }
-
   async function refresh() {
     setError(null);
 
@@ -123,7 +124,6 @@ export default function LeaderboardClient({ code }: { code: string }) {
         .eq("game_id", g.id);
 
       if (qErr) throw qErr;
-
       const questions = (qs ?? []) as QuestionRow[];
       const qCount = questions.length;
       setTotalQuestions(qCount);
@@ -134,6 +134,14 @@ export default function LeaderboardClient({ code }: { code: string }) {
       setNumCorrectSet(correctSetCount);
 
       const qIds = questions.map((q) => q.id);
+
+      // Map correct answers by Q
+      const correctByQ = new Map<string, string>();
+      for (const q of questions) {
+        if (q.correct_option && String(q.correct_option).trim() !== "") {
+          correctByQ.set(q.id, q.correct_option);
+        }
+      }
 
       // 3) Load players
       const { data: ps, error: pErr } = await supabase
@@ -148,14 +156,6 @@ export default function LeaderboardClient({ code }: { code: string }) {
       // 4) Load answers (paged to avoid 1000 row limit)
       const answers = await fetchAllAnswers(qIds);
 
-      // Map of correct answers by question
-      const correctByQ = new Map<string, string>();
-      for (const q of questions) {
-        if (q.correct_option && String(q.correct_option).trim() !== "") {
-          correctByQ.set(q.id, q.correct_option);
-        }
-      }
-
       // Count answered + correct per player
       const answeredSets = new Map<string, Set<string>>();
       const correctCounts = new Map<string, number>();
@@ -165,7 +165,7 @@ export default function LeaderboardClient({ code }: { code: string }) {
         answeredSets.get(a.player_id)!.add(a.question_id);
 
         const correct = correctByQ.get(a.question_id);
-        if (correct && a.option === correct) {
+        if (correct && (a.option ?? "") === correct) {
           correctCounts.set(a.player_id, (correctCounts.get(a.player_id) ?? 0) + 1);
         }
       }
@@ -213,19 +213,13 @@ export default function LeaderboardClient({ code }: { code: string }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [joinCode]);
 
-  // Realtime updates
+  // Realtime updates (simple)
   useEffect(() => {
     const channel = supabase
       .channel(`leaderboard-${joinCode}`)
-      .on("postgres_changes", { event: "*", schema: "public", table: "answers" }, () =>
-        refresh()
-      )
-      .on("postgres_changes", { event: "*", schema: "public", table: "players" }, () =>
-        refresh()
-      )
-      .on("postgres_changes", { event: "*", schema: "public", table: "questions" }, () =>
-        refresh()
-      )
+      .on("postgres_changes", { event: "*", schema: "public", table: "answers" }, () => refresh())
+      .on("postgres_changes", { event: "*", schema: "public", table: "players" }, () => refresh())
+      .on("postgres_changes", { event: "*", schema: "public", table: "questions" }, () => refresh())
       .subscribe();
 
     return () => {
@@ -236,7 +230,7 @@ export default function LeaderboardClient({ code }: { code: string }) {
 
   if (loading) {
     return (
-      <main className="min-h-screen p-6 flex items-center justify-center">
+      <main className="min-h-screen flex items-center justify-center">
         <p>Loading leaderboard…</p>
       </main>
     );
@@ -244,7 +238,7 @@ export default function LeaderboardClient({ code }: { code: string }) {
 
   if (error) {
     return (
-      <main className="min-h-screen p-6 max-w-2xl mx-auto">
+      <main className="min-h-screen max-w-2xl mx-auto">
         <h1 className="text-2xl font-semibold">Leaderboard</h1>
         <div className="mt-4 rounded-xl border border-red-300 bg-red-50 p-3 text-sm text-red-700">
           {error}
@@ -261,7 +255,8 @@ export default function LeaderboardClient({ code }: { code: string }) {
   if (!game) return null;
 
   return (
-    <main className="min-h-screen p-6 max-w-3xl mx-auto">
+    <main className="min-h-screen max-w-6xl mx-auto">
+      {/* Header */}
       <div className="flex items-start justify-between gap-4">
         <div>
           <h1 className="text-2xl font-semibold">Live Leaderboard</h1>
@@ -269,13 +264,12 @@ export default function LeaderboardClient({ code }: { code: string }) {
             {game.title} · Code: <span className="font-mono">{game.code}</span>
             {game.is_locked ? " · Locked" : ""}
           </p>
-          <p className="mt-1 text-sm text-gray-600">Total questions: {totalQuestions}</p>
-          <p className="mt-1 text-sm text-gray-600">
-            Correct answers entered: {numCorrectSet}/{totalQuestions}
+          <p className="mt-1 text-xs text-gray-500">
+            Correct shows score out of questions that have been scored so far.
           </p>
         </div>
 
-        <div className="flex gap-2">
+        <div className="flex flex-wrap gap-2">
           <button
             onClick={() => refresh()}
             className="rounded-xl border px-4 py-2 text-sm hover:bg-gray-50"
@@ -287,7 +281,7 @@ export default function LeaderboardClient({ code }: { code: string }) {
             href={
               displayName
                 ? `/game/${game.code}?name=${encodeURIComponent(displayName)}`
-                : `/`
+                : `/game/${game.code}`
             }
             className="rounded-xl border px-4 py-2 text-sm hover:bg-gray-50"
           >
@@ -300,14 +294,13 @@ export default function LeaderboardClient({ code }: { code: string }) {
           >
             Past Champions →
           </Link>
-          {game.is_locked && (
-            <Link
-              href={`/answers/${game.code}`}
-              className="rounded-xl border px-4 py-2 text-sm hover:bg-gray-50"
-            >
-              Everyone’s Answers →
-            </Link>
-          )}
+
+          <Link
+            href={`/answers/${game.code}`}
+            className="rounded-xl border px-4 py-2 text-sm hover:bg-gray-50"
+          >
+            Everyone’s Answers →
+          </Link>
 
           {isAdmin && (
             <button
@@ -326,10 +319,26 @@ export default function LeaderboardClient({ code }: { code: string }) {
         </div>
       </div>
 
-      <div className="mt-6 rounded-2xl border overflow-hidden">
-        <div className="overflow-x-auto -mx-6 px-6">
-          <div className="min-w-[700px]"
-          >
+      {/* Stat Cards */}
+      <div className="mt-6 grid grid-cols-2 gap-3 sm:grid-cols-4">
+        <StatCard label="Players" value={rows.length} />
+        <StatCard label="Questions" value={totalQuestions} />
+        <StatCard label="Scored" value={`${numCorrectSet}/${totalQuestions}`} />
+        <StatCard
+          label="Status"
+          value={
+            <span className={game.is_locked ? "text-gray-800" : "text-brand"}>
+              {game.is_locked ? "Locked" : "Open"}
+            </span>
+          }
+          sub="Updates live"
+        />
+      </div>
+
+      {/* Table */}
+      <div className="mt-6 rounded-2xl border overflow-hidden bg-white shadow-sm">
+        <div className="overflow-x-auto">
+          <div className="min-w-[760px]">
             <div className="grid grid-cols-12 bg-gray-50 px-4 py-3 text-xs font-semibold text-gray-600">
               <div className="col-span-4">Player</div>
               <div className="col-span-2 text-right">Correct</div>
