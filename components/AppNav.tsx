@@ -74,6 +74,7 @@ export default function AppNav() {
     { href: gameHref, label: "Game" },
     { href: `/leaderboard/${code}`, label: "Leaderboard" },
     { href: `/answers/${code}`, label: "Answers" },
+    { href: `/stats/${code}`, label: "Stats"},
     { href: "/champions", label: "Champions" },
   ];
 
