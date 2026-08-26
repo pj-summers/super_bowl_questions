@@ -4,12 +4,18 @@ import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { usePathname } from "next/navigation";
 import { supabase } from "@/lib/supabaseClient";
+import {
+  getGameStatus,
+  isGameLocked,
+  type GameStatus,
+} from "@/lib/gameStatus";
 
 type GameRow = {
   id: string;
   code: string;
   title: string;
   is_locked: boolean;
+  status: GameStatus;
 };
 
 function cn(...classes: Array<string | false | null | undefined>) {
@@ -42,7 +48,7 @@ export default function AppNav() {
       try {
         const { data, error } = await supabase
           .from("games")
-          .select("id, code, title, is_locked")
+          .select("id, code, title, is_locked, status")
           .eq("code", code)
           .maybeSingle();
 
@@ -63,7 +69,11 @@ export default function AppNav() {
     };
   }, [code]);
 
-  const locked = game?.is_locked ?? false;
+  const gameStatus = game
+  ? getGameStatus(game.status, game.is_locked)
+  : "pregame";
+
+const locked = isGameLocked(gameStatus);
 
   const gameHref = lastName
     ? `/game/${code}?name=${encodeURIComponent(lastName)}`
