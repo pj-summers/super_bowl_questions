@@ -10,6 +10,7 @@ type GameRow = {
   code: string;
   title: string;
   is_locked: boolean;
+  status: "pregame" | "live" | "completed";
 };
 
 type QuestionRow = {
@@ -36,12 +37,20 @@ export default function GameClient({ code }: { code: string }) {
 
   const [loading, setLoading] = useState(true);
   const [savingId, setSavingId] = useState<string | null>(null);
+  const [savedId, setSavedId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const [game, setGame] = useState<GameRow | null>(null);
   const [player, setPlayer] = useState<PlayerRow | null>(null);
   const [questions, setQuestions] = useState<QuestionRow[]>([]);
   const [answers, setAnswers] = useState<Record<string, string>>({});
+  const [currentQuestionIndex, setCurrentQuestionIndex] = useState(0);
+  const [viewMode, setViewMode] = useState<"card" | "all">("card");
+  const [reviewFilter, setReviewFilter] = useState<"all" | "unanswered">("all");
+  const [showCompletion, setShowCompletion] = useState(false);
+  const [hasShownCompletion, setHasShownCompletion] = useState(false);
+  const [showPregameHome, setShowPregameHome] = useState(false);
+  const [initialAnswerCount, setInitialAnswerCount] = useState<number | null>(null);
   const searchParams = useSearchParams();
   const router = useRouter();
   const displayName = (searchParams.get("name") ?? "").trim();
@@ -63,7 +72,7 @@ export default function GameClient({ code }: { code: string }) {
         // Fetch game
         const { data: g, error: gameError } = await supabase
           .from("games")
-          .select("id, code, title, is_locked")
+          .select("id, code, title, is_locked, status")
           .eq("code", joinCode)
           .single();
 
@@ -122,6 +131,7 @@ setPlayer(p);
           map[r.question_id] = r.option;
         });
         setAnswers(map);
+        setInitialAnswerCount(Object.keys(map).length);
       } catch (err: any) {
         setError(err?.message ?? "Something went wrong.");
       } finally {
@@ -170,6 +180,7 @@ setPlayer(p);
 
     setSavingId(questionId);
     setError(null);
+    setSavedId(null);
 
     try {
       setAnswers((prev) => ({ ...prev, [questionId]: option }));
@@ -180,6 +191,13 @@ setPlayer(p);
       );
 
       if (upsertError) throw upsertError;
+      setSavedId(questionId);
+
+      window.setTimeout(() => {
+        setSavedId((current) =>
+          current === questionId ? null : current
+        );
+      }, 1200);
     } catch (err: any) {
       setError(err?.message ?? "Failed to save answer.");
     } finally {
@@ -189,6 +207,41 @@ setPlayer(p);
 
   const answeredCount = Object.keys(answers).length;
   const totalCount = questions.length;
+  const currentQuestion = questions[currentQuestionIndex] ?? null;
+
+  const progressPercent =
+    totalCount > 0 ? Math.round((answeredCount / totalCount) * 100) : 0;
+
+  const unansweredCount = totalCount - answeredCount;
+
+  const reviewQuestions =
+    reviewFilter === "unanswered"
+      ? questions.filter((question) => !answers[question.id])
+      : questions;
+
+  useEffect(() => {
+    if (
+      initialAnswerCount !== null &&
+      totalCount > 0 &&
+      initialAnswerCount === totalCount &&
+      game?.status === "pregame" &&
+      !game.is_locked
+    ) {
+      setShowPregameHome(true);
+      setHasShownCompletion(true);
+    }
+  }, [initialAnswerCount, totalCount, game]);
+
+  useEffect(() => {
+    if (
+      totalCount > 0 &&
+      answeredCount === totalCount &&
+      !hasShownCompletion
+    ) {
+      setShowCompletion(true);
+      setHasShownCompletion(true);
+    }
+  }, [answeredCount, totalCount, hasShownCompletion]);
 
   if (loading) {
     return (
@@ -217,79 +270,358 @@ setPlayer(p);
   if (!game || !player) return null;
 
   return (
-    <main className="min-h-screen p-6 max-w-3xl mx-auto">
-      <div className="flex items-start justify-between gap-4">
+  <div className="mx-auto max-w-xl py-4 sm:py-8">
+    <div className="mb-6">
+      <p className="sbq-eyebrow">{game.title}</p>
+
+      <div className="mt-2 flex items-end justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-semibold">{game.title}</h1>
-          <p className="text-sm text-gray-600 mt-1">
-            Code: <span className="font-mono">{game.code}</span> · Player:{" "}
-            <span className="font-medium">{player.display_name}</span>
-          </p>
-          <p className="text-sm text-gray-600 mt-1">
-            Progress: {answeredCount}/{totalCount}
-            {game.is_locked ? " · Submissions locked" : ""}
-          </p>
+          <h1 className="text-2xl font-bold tracking-tight">
+            {player.display_name}&apos;s Picks
+          </h1>
+
+          <div className="mt-1 flex items-center gap-3">
+            <p className="text-sm text-muted">
+              {answeredCount} of {totalCount} answered
+            </p>
+
+            {viewMode === "card" && (
+              <button
+                type="button"
+                onClick={() => setViewMode("all")}
+                className="text-sm font-semibold text-brand hover:underline"
+              >
+                View All
+              </button>
+            )}
+          </div>
         </div>
 
-        <Link
-          className="rounded-xl border px-4 py-2 text-sm hover:bg-gray-50"
-          href={`/leaderboard/${game.code}?name=${encodeURIComponent(player.display_name)}`}
-        >
-          View Live Leaderboard →
-        </Link>
+        {game.is_locked && (
+          <span className="rounded-full border border-warning/20 bg-warning-soft px-3 py-1 text-xs font-semibold text-warning">
+            Locked
+          </span>
+        )}
       </div>
 
-      {game.is_locked && (
-        <div className="mt-4 rounded-xl border bg-yellow-50 p-3 text-sm">
-          This game is locked. Answers can’t be changed.
+      <div className="mt-4 h-2 overflow-hidden rounded-full bg-border">
+        <div
+          className="h-full rounded-full bg-brand transition-[width] duration-300"
+          style={{ width: `${progressPercent}%` }}
+        />
+      </div>
+    </div>
+
+    {game.is_locked && (
+      <div className="mb-4 rounded-xl border border-warning/20 bg-warning-soft p-4 text-sm">
+        Picks are locked. Your answers can no longer be changed.
+      </div>
+    )}
+
+  {showPregameHome ? (
+  <section className="sbq-card overflow-hidden">
+    <div className="px-6 py-10 text-center sm:px-10 sm:py-12">
+      <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-full bg-success-soft text-2xl text-success">
+        ✓
+      </div>
+
+      <p className="sbq-eyebrow mt-5">Pregame Picks</p>
+
+      <h2 className="mt-2 text-3xl font-bold tracking-tight">
+        You&apos;re Ready
+      </h2>
+
+      <p className="mx-auto mt-3 max-w-md text-sm leading-6 text-muted">
+        All {totalCount} of your picks are saved. You can review or change
+        them until picks are locked.
+      </p>
+
+      <div className="mt-7 flex flex-col justify-center gap-3 sm:flex-row">
+        <button
+          type="button"
+          onClick={() => {
+            setShowPregameHome(false);
+            setViewMode("all");
+          }}
+          className="sbq-touch-target rounded-xl bg-brand px-5 py-3 text-sm font-semibold text-brand-foreground transition-opacity hover:opacity-90"
+        >
+          Review My Picks
+        </button>
+
+        <a
+          href="/champions"
+          className="sbq-touch-target inline-flex items-center justify-center rounded-xl border border-border bg-surface px-5 py-3 text-sm font-semibold text-foreground transition-colors hover:bg-surface-subtle"
+        >
+          Hall of Champions
+        </a>
+      </div>
+    </div>
+  </section>
+) : showCompletion ? (
+  <section className="sbq-card overflow-hidden">
+    <div className="px-6 py-10 text-center sm:px-10 sm:py-14">
+      <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-full bg-success-soft text-2xl text-success">
+        ✓
+      </div>
+
+      <p className="sbq-eyebrow mt-5">Pregame Picks Complete</p>
+
+      <h2 className="mt-2 text-3xl font-bold tracking-tight">
+        You&apos;re All Set
+      </h2>
+
+      <p className="mx-auto mt-3 max-w-md text-sm leading-6 text-muted">
+        All {totalCount} of your picks are saved. You can still review and
+        change them until picks are locked.
+      </p>
+
+      <div className="mt-7 flex flex-col justify-center gap-3 sm:flex-row">
+        <button
+          type="button"
+          onClick={() => {
+            setShowCompletion(false);
+            setViewMode("all");
+          }}
+          className="sbq-touch-target rounded-xl bg-brand px-5 py-3 text-sm font-semibold text-brand-foreground transition-opacity hover:opacity-90"
+        >
+          Review My Picks
+        </button>
+
+        <button
+          type="button"
+          onClick={() => setShowCompletion(false)}
+          className="sbq-touch-target rounded-xl border border-border bg-surface px-5 py-3 text-sm font-semibold text-foreground transition-colors hover:bg-surface-subtle"
+        >
+          Back to Questions
+        </button>
+      </div>
+    </div>
+  </section>
+) : viewMode === "all" ? (
+  <section className="sbq-card overflow-hidden">
+    <div className="border-b border-border px-5 py-5 sm:px-6">
+      <div className="flex items-center justify-between gap-4">
+        <div>
+          <p className="sbq-eyebrow">Review Picks</p>
+          <h2 className="mt-1 text-xl font-bold tracking-tight">
+            All Questions
+          </h2>
+        </div>
+
+        <button
+          type="button"
+          onClick={() => setViewMode("card")}
+          className="sbq-touch-target rounded-xl border border-border bg-surface px-4 py-2 text-sm font-semibold transition-colors hover:bg-surface-subtle"
+        >
+          Back to Question
+        </button>
+      </div>
+
+      <div className="mt-5 flex gap-2">
+        <button
+          type="button"
+          onClick={() => setReviewFilter("all")}
+          className={[
+            "rounded-full px-4 py-2 text-sm font-semibold transition",
+            reviewFilter === "all"
+              ? "bg-foreground text-background"
+              : "border border-border bg-surface text-muted hover:bg-surface-subtle",
+          ].join(" ")}
+        >
+          All ({totalCount})
+        </button>
+
+        <button
+          type="button"
+          onClick={() => setReviewFilter("unanswered")}
+          className={[
+            "rounded-full px-4 py-2 text-sm font-semibold transition",
+            reviewFilter === "unanswered"
+              ? "bg-foreground text-background"
+              : "border border-border bg-surface text-muted hover:bg-surface-subtle",
+          ].join(" ")}
+        >
+          Unanswered ({unansweredCount})
+        </button>
+      </div>
+    </div>
+
+    <div className="divide-y divide-border">
+      {reviewQuestions.map((question) => {
+        const questionIndex = questions.findIndex(
+          (item) => item.id === question.id
+        );
+
+        const selectedAnswer = answers[question.id];
+
+        return (
+          <button
+            key={question.id}
+            type="button"
+            onClick={() => {
+              setCurrentQuestionIndex(questionIndex);
+              setViewMode("card");
+            }}
+            className="sbq-touch-target flex w-full items-center justify-between gap-4 px-5 py-4 text-left transition-colors hover:bg-surface-subtle sm:px-6"
+          >
+            <div className="min-w-0">
+              <p className="text-xs font-semibold uppercase tracking-wide text-muted">
+                Question {questionIndex + 1}
+              </p>
+
+              <p className="mt-1 font-semibold leading-snug text-foreground">
+                {question.prompt}
+              </p>
+
+              <p
+                className={[
+                  "mt-1.5 text-sm",
+                  selectedAnswer
+                    ? "font-medium text-brand"
+                    : "text-muted",
+                ].join(" ")}
+              >
+                {selectedAnswer ?? "Unanswered"}
+              </p>
+            </div>
+
+            <span className="shrink-0 text-lg text-muted">
+              →
+            </span>
+          </button>
+        );
+      })}
+
+      {reviewQuestions.length === 0 && (
+        <div className="px-5 py-10 text-center sm:px-6">
+          <p className="font-semibold">
+            No unanswered questions.
+          </p>
+
+          <p className="mt-1 text-sm text-muted">
+            You&apos;ve answered all {totalCount} questions.
+          </p>
         </div>
       )}
+    </div>
+  </section>
+) : currentQuestion ? (
+      <section className="sbq-card overflow-hidden">
+        <div className="border-b border-border px-5 py-4 sm:px-6">
+          <div className="flex items-center justify-between gap-4">
+            <p className="sbq-eyebrow">
+              Question {currentQuestionIndex + 1} of {totalCount}
+            </p>
 
-      <div className="mt-6 space-y-4">
-        {questions.map((q, idx) => (
-          <div key={q.id} className="rounded-2xl border p-4">
-            <div className="flex items-start justify-between gap-4">
-              <div>
-                <p className="text-sm text-gray-500">Q{idx + 1}</p>
-                <p className="mt-1 font-medium">{q.prompt}</p>
-              </div>
-
-              {savingId === q.id && (
-                <span className="text-xs text-gray-500">Saving…</span>
+            <div className="min-h-5 text-right">
+              {savingId === currentQuestion.id && (
+                <span className="text-xs font-medium text-muted">
+                  Saving...
+                </span>
               )}
-            </div>
 
-            <div className="mt-3">
-              <select
-                className="w-full rounded-xl border px-3 py-2"
-                value={answers[q.id] ?? ""}
-                onChange={(e) => saveAnswer(q.id, e.target.value)}
-                disabled={game.is_locked}
-              >
-                <option value="" disabled>
-                  Select an answer…
-                </option>
-                {q.options.map((opt) => (
-                  <option key={opt} value={opt}>
-                    {opt}
-                  </option>
-                ))}
-              </select>
-
-              {q.options.length === 1 && q.options[0] === "TBD" && (
-                <p className="mt-2 text-xs text-gray-500">
-                  Options are still <span className="font-mono">TBD</span>. Update in Supabase →
-                  questions → options.
-                </p>
-              )}
+              {savingId !== currentQuestion.id &&
+                savedId === currentQuestion.id && (
+                  <span className="text-xs font-semibold text-success">
+                    Saved ✓
+                  </span>
+                )}
             </div>
           </div>
-        ))}
-      </div>
+        </div>
 
-      <p className="mt-8 text-xs text-gray-500">
-        Answers save automatically when you choose an option.
-      </p>
-    </main>
+        <div className="p-5 sm:p-6">
+          <h2 className="text-xl font-bold leading-snug tracking-tight sm:text-2xl">
+            {currentQuestion.prompt}
+          </h2>
+
+          <div className="mt-6 space-y-3">
+            {currentQuestion.options.map((option) => {
+              const selected =
+                answers[currentQuestion.id] === option;
+
+              return (
+                <button
+                  key={option}
+                  type="button"
+                  disabled={game.is_locked}
+                  onClick={() =>
+                    saveAnswer(currentQuestion.id, option)
+                  }
+                  className={[
+                    "sbq-touch-target flex w-full items-center gap-3 rounded-xl border px-4 py-3.5 text-left text-base font-medium transition",
+                    selected
+                      ? "border-brand bg-brand-soft text-brand"
+                      : "border-border bg-surface hover:border-border-strong hover:bg-surface-subtle",
+                    game.is_locked
+                      ? "cursor-default opacity-80"
+                      : "cursor-pointer",
+                  ].join(" ")}
+                >
+                  <span
+                    className={[
+                      "flex h-5 w-5 shrink-0 items-center justify-center rounded-full border",
+                      selected
+                        ? "border-brand bg-brand text-brand-foreground"
+                        : "border-border-strong bg-surface",
+                    ].join(" ")}
+                  >
+                    {selected && (
+                      <span className="h-1.5 w-1.5 rounded-full bg-current" />
+                    )}
+                  </span>
+
+                  <span>{option}</span>
+                </button>
+              );
+            })}
+          </div>
+
+          {currentQuestion.options.length === 1 &&
+            currentQuestion.options[0] === "TBD" && (
+              <p className="mt-4 text-xs text-muted">
+                Options for this question are still TBD.
+              </p>
+            )}
+        </div>
+
+        <div className="mt-7 flex items-center justify-between gap-3 border-t border-border pt-5">
+          <button
+            type="button"
+            onClick={() =>
+              setCurrentQuestionIndex((current) =>
+                Math.max(0, current - 1)
+              )
+            }
+            disabled={currentQuestionIndex === 0}
+            className="sbq-touch-target rounded-xl border border-border bg-surface px-4 py-3 text-sm font-semibold text-foreground transition-colors hover:bg-surface-subtle disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            ← Back
+          </button>
+
+          <button
+            type="button"
+            onClick={() =>
+              setCurrentQuestionIndex((current) =>
+                Math.min(totalCount - 1, current + 1)
+              )
+            }
+            disabled={currentQuestionIndex >= totalCount - 1}
+            className="sbq-touch-target rounded-xl bg-brand px-5 py-3 text-sm font-semibold text-brand-foreground transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            Next →
+          </button>
+        </div>
+      </section>
+    ) : (
+      <div className="sbq-card p-6 text-sm text-muted">
+        No questions are available for this game yet.
+      </div>
+    )}
+
+    <p className="mt-5 text-center text-xs text-muted">
+      Your selections save automatically.
+    </p>
+  </div>
   );
 }
