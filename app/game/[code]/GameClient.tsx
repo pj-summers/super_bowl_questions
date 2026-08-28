@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { supabase } from "@/lib/supabaseClient";
 import { useRouter, useSearchParams } from "next/navigation";
+import { useLivePolling } from "@/lib/useLivePolling";
 
 type GameRow = {
   id: string;
@@ -18,6 +19,8 @@ type QuestionRow = {
   prompt: string;
   options: string[];
   sort_order: number;
+  correct_option: string | null;
+  resolved_at: string | null;
 };
 
 type PlayerRow = {
@@ -32,6 +35,53 @@ type AnswerRow = {
   option: string;
 };
 
+type LiveAnswerRow = {
+  player_id: string;
+  question_id: string;
+  option: string;
+};
+
+type LivePlayerRow = {
+  id: string;
+  display_name: string;
+};
+
+type LiveStandingRow = {
+  playerId: string;
+  name: string;
+  score: number;
+  rank: number;
+};
+
+async function fetchAllLiveAnswers(
+  questionIds: string[]
+): Promise<LiveAnswerRow[]> {
+  if (questionIds.length === 0) return [];
+
+  const PAGE_SIZE = 1000;
+  let allAnswers: LiveAnswerRow[] = [];
+  let from = 0;
+
+  while (true) {
+    const { data, error } = await supabase
+      .from("answers")
+      .select("player_id, question_id, option")
+      .in("question_id", questionIds)
+      .range(from, from + PAGE_SIZE - 1);
+
+    if (error) throw error;
+
+    const rows = (data ?? []) as LiveAnswerRow[];
+    allAnswers = allAnswers.concat(rows);
+
+    if (rows.length < PAGE_SIZE) break;
+
+    from += PAGE_SIZE;
+  }
+
+  return allAnswers;
+}
+
 export default function GameClient({ code }: { code: string }) {
   const joinCode = code;
 
@@ -43,6 +93,8 @@ export default function GameClient({ code }: { code: string }) {
   const [game, setGame] = useState<GameRow | null>(null);
   const [player, setPlayer] = useState<PlayerRow | null>(null);
   const [questions, setQuestions] = useState<QuestionRow[]>([]);
+  const [livePlayers, setLivePlayers] = useState<LivePlayerRow[]>([]);
+const [liveAnswers, setLiveAnswers] = useState<LiveAnswerRow[]>([]);
   const [answers, setAnswers] = useState<Record<string, string>>({});
   const [currentQuestionIndex, setCurrentQuestionIndex] = useState(0);
   const [viewMode, setViewMode] = useState<"card" | "all">("card");
@@ -103,20 +155,22 @@ setPlayer(p);
         // Fetch questions in order
         const { data: qs, error: qError } = await supabase
           .from("questions")
-          .select("id, prompt, options, sort_order")
+          .select("id, prompt, options, sort_order, correct_option, resolved_at")
           .eq("game_id", g.id)
           .order("sort_order", { ascending: true });
 
         if (qError) throw qError;
 
-        setQuestions(
-          (qs ?? []).map((row: any) => ({
-            id: row.id,
-            prompt: row.prompt,
-            options: row.options,
-            sort_order: row.sort_order,
-          }))
-        );
+        const loadedQuestions = (qs ?? []).map((row: any) => ({
+  id: row.id,
+  prompt: row.prompt,
+  options: row.options,
+  sort_order: row.sort_order,
+  correct_option: row.correct_option,
+  resolved_at: row.resolved_at,
+}));
+
+setQuestions(loadedQuestions);
 
         // Fetch existing answers for this player
         const { data: as, error: aError } = await supabase
@@ -132,6 +186,25 @@ setPlayer(p);
         });
         setAnswers(map);
         setInitialAnswerCount(Object.keys(map).length);
+        if (g.status === "live") {
+  const { data: livePlayerData, error: livePlayerError } =
+    await supabase
+      .from("players")
+      .select("id, display_name")
+      .eq("game_id", g.id);
+
+  if (livePlayerError) throw livePlayerError;
+
+  const liveAnswerData = await fetchAllLiveAnswers(
+    loadedQuestions.map((question) => question.id)
+  );
+
+  setLivePlayers(
+    (livePlayerData ?? []) as LivePlayerRow[]
+  );
+
+  setLiveAnswers(liveAnswerData);
+}
       } catch (err: any) {
         setError(err?.message ?? "Something went wrong.");
       } finally {
@@ -173,7 +246,72 @@ setPlayer(p);
   };
 }, [code, router, searchParams]);
 
+  async function refreshLiveSnapshot() {
+  if (!game || game.status !== "live") return;
 
+  try {
+    const { data: freshGame, error: gameError } = await supabase
+      .from("games")
+      .select("id, code, title, is_locked, status")
+      .eq("id", game.id)
+      .single();
+
+    if (gameError || !freshGame) throw gameError;
+
+    setGame(freshGame as GameRow);
+
+    if (freshGame.status !== "live") {
+      window.location.reload();
+      return;
+    }
+
+    const { data: freshQuestions, error: questionError } =
+      await supabase
+        .from("questions")
+        .select(
+          "id, prompt, options, sort_order, correct_option, resolved_at"
+        )
+        .eq("game_id", game.id)
+        .order("sort_order", { ascending: true });
+
+    if (questionError) throw questionError;
+
+    const nextQuestions = (freshQuestions ?? []).map(
+      (row: any) => ({
+        id: row.id,
+        prompt: row.prompt,
+        options: row.options,
+        sort_order: row.sort_order,
+        correct_option: row.correct_option,
+        resolved_at: row.resolved_at,
+      })
+    );
+
+    const { data: freshPlayers, error: playerError } =
+      await supabase
+        .from("players")
+        .select("id, display_name")
+        .eq("game_id", game.id);
+
+    if (playerError) throw playerError;
+
+    const freshAnswers = await fetchAllLiveAnswers(
+      nextQuestions.map((question) => question.id)
+    );
+
+    setQuestions(nextQuestions);
+    setLivePlayers(
+      (freshPlayers ?? []) as LivePlayerRow[]
+    );
+    setLiveAnswers(freshAnswers);
+  } catch (err) {
+    console.error("Live refresh failed:", err);
+  }
+}
+useLivePolling({
+  enabled: game?.status === "live",
+  onPoll: refreshLiveSnapshot,
+});
   async function saveAnswer(questionId: string, option: string) {
     if (!player || !game) return;
     if (game.is_locked) return;
@@ -207,6 +345,172 @@ setPlayer(p);
 
   const answeredCount = Object.keys(answers).length;
   const totalCount = questions.length;
+  const resolvedQuestionIds = new Set(
+  questions
+    .filter((question) => question.correct_option)
+    .map((question) => question.id)
+);
+
+const correctAnswerByQuestion = new Map(
+  questions
+    .filter((question) => question.correct_option)
+    .map((question) => [
+      question.id,
+      question.correct_option as string,
+    ])
+);
+
+const scoreByPlayer = new Map<string, number>();
+
+for (const livePlayer of livePlayers) {
+  scoreByPlayer.set(livePlayer.id, 0);
+}
+
+for (const answer of liveAnswers) {
+  if (!resolvedQuestionIds.has(answer.question_id)) continue;
+
+  const correctAnswer =
+    correctAnswerByQuestion.get(answer.question_id);
+
+  if (answer.option === correctAnswer) {
+    scoreByPlayer.set(
+      answer.player_id,
+      (scoreByPlayer.get(answer.player_id) ?? 0) + 1
+    );
+  }
+}
+
+const sortedLivePlayers = [...livePlayers].sort((a, b) => {
+  const scoreDifference =
+    (scoreByPlayer.get(b.id) ?? 0) -
+    (scoreByPlayer.get(a.id) ?? 0);
+
+  if (scoreDifference !== 0) return scoreDifference;
+
+  return a.display_name.localeCompare(b.display_name);
+});
+
+let previousScore: number | null = null;
+let previousRank = 0;
+
+const liveStandings: LiveStandingRow[] =
+  sortedLivePlayers.map((livePlayer, index) => {
+    const score = scoreByPlayer.get(livePlayer.id) ?? 0;
+
+    const rank =
+      previousScore === score ? previousRank : index + 1;
+
+    previousScore = score;
+    previousRank = rank;
+
+    return {
+      playerId: livePlayer.id,
+      name: livePlayer.display_name,
+      score,
+      rank,
+    };
+  });
+
+const currentStanding =
+  liveStandings.find(
+    (standing) => standing.playerId === player?.id
+  ) ?? null;
+
+  const topFiveStandings = liveStandings.slice(0, 5);
+
+const currentPlayerInTopFive =
+  currentStanding != null &&
+  topFiveStandings.some(
+    (standing) => standing.playerId === currentStanding.playerId
+  );
+
+const miniLeaderboardRows =
+  currentStanding && !currentPlayerInTopFive
+    ? [...topFiveStandings, currentStanding]
+    : topFiveStandings;
+
+const leaderScore =
+  liveStandings.length > 0
+    ? liveStandings[0].score
+    : 0;
+
+const pointsBehindFirst = currentStanding
+  ? Math.max(0, leaderScore - currentStanding.score)
+  : 0;
+
+const resolvedCount = questions.filter(
+  (question) => question.correct_option
+).length;
+const currentPlayerAnswerByQuestion = new Map(
+  liveAnswers
+    .filter((answer) => answer.player_id === player?.id)
+    .map((answer) => [answer.question_id, answer.option])
+);
+function getCrowdAccuracy(questionId: string, correctOption: string) {
+  const correctCount = liveAnswers.filter(
+    (answer) =>
+      answer.question_id === questionId &&
+      answer.option === correctOption
+  ).length;
+
+  const totalPlayers = livePlayers.length;
+
+  return {
+    correctCount,
+    totalPlayers,
+    accuracyPercent:
+      totalPlayers > 0
+        ? Math.round((correctCount / totalPlayers) * 100)
+        : 0,
+  };
+}
+const recentResults = questions
+  .filter(
+    (question) =>
+      question.correct_option != null &&
+      question.resolved_at != null
+  )
+  .sort((a, b) => {
+    const aTime = new Date(a.resolved_at as string).getTime();
+    const bTime = new Date(b.resolved_at as string).getTime();
+
+    return bTime - aTime;
+  })
+  .slice(0, 3);
+  const livePickSummary = questions.reduce(
+  (summary, question) => {
+    const playerAnswer =
+      currentPlayerAnswerByQuestion.get(question.id) ?? null;
+
+    const isResolved =
+      question.correct_option != null &&
+      String(question.correct_option).trim() !== "";
+
+    if (!playerAnswer) {
+      summary.unanswered += 1;
+      return summary;
+    }
+
+    if (!isResolved) {
+      summary.stillAlive += 1;
+      return summary;
+    }
+
+    if (playerAnswer === question.correct_option) {
+      summary.correct += 1;
+    } else {
+      summary.missed += 1;
+    }
+
+    return summary;
+  },
+  {
+    correct: 0,
+    missed: 0,
+    stillAlive: 0,
+    unanswered: 0,
+  }
+);
   const currentQuestion = questions[currentQuestionIndex] ?? null;
 
   const progressPercent =
@@ -233,15 +537,16 @@ setPlayer(p);
   }, [initialAnswerCount, totalCount, game]);
 
   useEffect(() => {
-    if (
-      totalCount > 0 &&
-      answeredCount === totalCount &&
-      !hasShownCompletion
-    ) {
+  if (
+    game?.status === "pregame" &&
+    totalCount > 0 &&
+    answeredCount === totalCount &&
+    !hasShownCompletion
+  ) {
       setShowCompletion(true);
       setHasShownCompletion(true);
     }
-  }, [answeredCount, totalCount, hasShownCompletion]);
+  }, [game?.status, answeredCount, totalCount, hasShownCompletion]);
 
   if (loading) {
     return (
@@ -268,6 +573,382 @@ setPlayer(p);
   }
 
   if (!game || !player) return null;
+
+  if (game.status === "live") {
+  return (
+    <div className="mx-auto max-w-xl py-4 pb-24 sm:py-8">
+      <div className="mb-5 flex items-center justify-between gap-4">
+        <div>
+          <p className="sbq-eyebrow">{game.title}</p>
+          <h1 className="mt-1 text-xl font-bold tracking-tight">
+            Game Day
+          </h1>
+        </div>
+
+        <span className="rounded-full border border-success/20 bg-success-soft px-3 py-1 text-xs font-bold uppercase tracking-wide text-success">
+          Live
+        </span>
+      </div>
+
+      <section className="sbq-card overflow-hidden">
+        <div className="px-6 py-8 text-center sm:px-10 sm:py-10">
+          <p className="text-sm font-semibold text-muted">
+            {player.display_name}
+          </p>
+
+          <div className="mt-3">
+            <p className="text-6xl font-black tracking-tight sm:text-7xl">
+              #{currentStanding?.rank ?? "—"}
+            </p>
+
+            <p className="mt-1 text-sm font-medium text-muted">
+              of {livePlayers.length} players
+            </p>
+          </div>
+
+          <div className="mx-auto mt-7 grid max-w-md grid-cols-2 divide-x divide-border rounded-2xl border border-border bg-surface-subtle">
+            <div className="p-4">
+              <p className="text-3xl font-bold">
+                {currentStanding?.score ?? 0}
+              </p>
+
+              <p className="mt-1 text-xs font-semibold uppercase tracking-wide text-muted">
+                Points
+              </p>
+            </div>
+
+            <div className="p-4">
+              <p className="text-3xl font-bold">
+                {pointsBehindFirst}
+              </p>
+
+              <p className="mt-1 text-xs font-semibold uppercase tracking-wide text-muted">
+                Behind 1st
+              </p>
+            </div>
+          </div>
+
+          <div className="mt-7">
+            <div className="flex items-center justify-between text-sm">
+              <span className="font-semibold">
+                Game Progress
+              </span>
+
+              <span className="font-medium text-muted">
+                {resolvedCount} of {totalCount} resolved
+              </span>
+            </div>
+
+            <div className="mt-2 h-2 overflow-hidden rounded-full bg-border">
+              <div
+                className="h-full rounded-full bg-brand transition-[width] duration-300"
+                style={{
+                  width:
+                    totalCount > 0
+                      ? `${Math.round(
+                          (resolvedCount / totalCount) * 100
+                        )}%`
+                      : "0%",
+                }}
+              />
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section className="mt-5 sbq-card overflow-hidden">
+  <div className="flex items-end justify-between gap-4 border-b border-border px-5 py-5 sm:px-6">
+    <div>
+      <p className="sbq-eyebrow">Game Day</p>
+
+      <h2 className="mt-1 text-xl font-bold tracking-tight">
+        Recent Results
+      </h2>
+    </div>
+
+    <Link
+      href={`/answers/${game.code}?name=${encodeURIComponent(
+        player.display_name
+      )}`}
+      className="shrink-0 text-sm font-semibold text-brand hover:underline"
+    >
+      View All Results
+    </Link>
+  </div>
+
+  {recentResults.length === 0 ? (
+    <div className="px-5 py-8 text-center sm:px-6">
+      <p className="font-semibold">
+        No results yet
+      </p>
+
+      <p className="mt-1 text-sm text-muted">
+        Resolved questions will appear here as the game unfolds.
+      </p>
+    </div>
+  ) : (
+    <div className="divide-y divide-border">
+      {recentResults.map((question) => {
+        const correctAnswer = question.correct_option as string;
+
+        const playerAnswer =
+          currentPlayerAnswerByQuestion.get(question.id) ?? null;
+
+        const isCorrect =
+          playerAnswer != null &&
+          playerAnswer === correctAnswer;
+
+        const crowd = getCrowdAccuracy(
+          question.id,
+          correctAnswer
+        );
+
+        return (
+          <div
+            key={question.id}
+            className="px-5 py-5 sm:px-6"
+          >
+            <div className="flex items-start justify-between gap-4">
+              <div className="min-w-0">
+                <p className="text-xs font-semibold uppercase tracking-wide text-muted">
+                  Question {question.sort_order + 1}
+                </p>
+
+                <h3 className="mt-1 font-bold leading-snug">
+                  {question.prompt}
+                </h3>
+              </div>
+
+              <span
+                className={[
+                  "flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-sm font-bold",
+                  playerAnswer == null
+                    ? "bg-surface-subtle text-muted"
+                    : isCorrect
+                      ? "bg-success-soft text-success"
+                      : "bg-danger-soft text-danger",
+                ].join(" ")}
+                aria-label={
+                  playerAnswer == null
+                    ? "No answer"
+                    : isCorrect
+                      ? "Correct"
+                      : "Incorrect"
+                }
+              >
+                {playerAnswer == null
+                  ? "—"
+                  : isCorrect
+                    ? "✓"
+                    : "✕"}
+              </span>
+            </div>
+
+            <div className="mt-4 space-y-2 text-sm">
+              <div className="flex items-start justify-between gap-4">
+                <span className="text-muted">
+                  Correct
+                </span>
+
+                <span className="text-right font-semibold text-success">
+                  {correctAnswer}
+                </span>
+              </div>
+
+              <div className="flex items-start justify-between gap-4">
+                <span className="text-muted">
+                  Your pick
+                </span>
+
+                <span
+                  className={[
+                    "text-right font-semibold",
+                    playerAnswer == null
+                      ? "text-muted"
+                      : isCorrect
+                        ? "text-success"
+                        : "text-danger",
+                  ].join(" ")}
+                >
+                  {playerAnswer ?? "No Answer"}
+                </span>
+              </div>
+
+              <div className="flex items-start justify-between gap-4">
+                <span className="text-muted">
+                  Crowd accuracy
+                </span>
+
+                <span className="text-right font-semibold">
+                  {crowd.correctCount}/{crowd.totalPlayers}
+                  {" · "}
+                  {crowd.accuracyPercent}%
+                </span>
+              </div>
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  )}
+</section>
+<section className="mt-5 sbq-card overflow-hidden">
+  <div className="flex items-end justify-between gap-4 border-b border-border px-5 py-5 sm:px-6">
+    <div>
+      <p className="sbq-eyebrow">Standings</p>
+
+      <h2 className="mt-1 text-xl font-bold tracking-tight">
+        Leaders
+      </h2>
+    </div>
+
+    <Link
+      href={`/leaderboard/${game.code}`}
+      className="shrink-0 text-sm font-semibold text-brand hover:underline"
+    >
+      View Full Leaderboard
+    </Link>
+  </div>
+
+  {miniLeaderboardRows.length === 0 ? (
+    <div className="px-5 py-8 text-center text-sm text-muted sm:px-6">
+      No players yet.
+    </div>
+  ) : (
+    <div className="divide-y divide-border">
+      {miniLeaderboardRows.map((standing, index) => {
+        const isCurrentPlayer =
+          standing.playerId === player.id;
+
+        const isSeparatedCurrentPlayer =
+          isCurrentPlayer &&
+          !currentPlayerInTopFive &&
+          index === miniLeaderboardRows.length - 1;
+
+        return (
+          <div key={standing.playerId}>
+            {isSeparatedCurrentPlayer && (
+              <div className="bg-surface-subtle px-5 py-2 text-center text-xs font-semibold text-muted sm:px-6">
+                Your Position
+              </div>
+            )}
+
+            <div
+              className={[
+                "flex items-center gap-4 px-5 py-4 sm:px-6",
+                isCurrentPlayer
+                  ? "bg-brand-soft"
+                  : "bg-surface",
+              ].join(" ")}
+            >
+              <div className="w-8 shrink-0 text-center">
+                <span
+                  className={[
+                    "text-lg font-bold",
+                    isCurrentPlayer
+                      ? "text-brand"
+                      : "text-foreground",
+                  ].join(" ")}
+                >
+                  {standing.rank}
+                </span>
+              </div>
+
+              <div className="min-w-0 flex-1">
+                <p
+                  className={[
+                    "truncate font-semibold",
+                    isCurrentPlayer
+                      ? "text-brand"
+                      : "text-foreground",
+                  ].join(" ")}
+                >
+                  {standing.name}
+                  {isCurrentPlayer ? " · You" : ""}
+                </p>
+              </div>
+
+              <div className="shrink-0 text-right">
+                <p className="text-lg font-bold">
+                  {standing.score}
+                </p>
+
+                <p className="text-xs font-medium text-muted">
+                  pts
+                </p>
+              </div>
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  )}
+</section>
+<section className="mt-5 sbq-card overflow-hidden">
+  <div className="flex items-end justify-between gap-4 border-b border-border px-5 py-5 sm:px-6">
+    <div>
+      <p className="sbq-eyebrow">Your Picks</p>
+
+      <h2 className="mt-1 text-xl font-bold tracking-tight">
+        Prediction Summary
+      </h2>
+    </div>
+
+    <Link
+      href={`/answers/${game.code}?name=${encodeURIComponent(
+        player.display_name
+      )}`}
+      className="shrink-0 text-sm font-semibold text-brand hover:underline"
+    >
+      View My Picks
+    </Link>
+  </div>
+
+  <div className="grid grid-cols-2 gap-px bg-border sm:grid-cols-4">
+    <div className="bg-surface p-4 text-center sm:p-5">
+      <p className="text-2xl font-bold text-success">
+        {livePickSummary.correct}
+      </p>
+
+      <p className="mt-1 text-xs font-semibold uppercase tracking-wide text-muted">
+        Correct
+      </p>
+    </div>
+
+    <div className="bg-surface p-4 text-center sm:p-5">
+      <p className="text-2xl font-bold text-danger">
+        {livePickSummary.missed}
+      </p>
+
+      <p className="mt-1 text-xs font-semibold uppercase tracking-wide text-muted">
+        Missed
+      </p>
+    </div>
+
+    <div className="bg-surface p-4 text-center sm:p-5">
+      <p className="text-2xl font-bold">
+        {livePickSummary.stillAlive}
+      </p>
+
+      <p className="mt-1 text-xs font-semibold uppercase tracking-wide text-muted">
+        Still Alive
+      </p>
+    </div>
+
+    <div className="bg-surface p-4 text-center sm:p-5">
+      <p className="text-2xl font-bold text-muted">
+        {livePickSummary.unanswered}
+      </p>
+
+      <p className="mt-1 text-xs font-semibold uppercase tracking-wide text-muted">
+        Unanswered
+      </p>
+    </div>
+  </div>
+</section>
+    </div>
+  );
+}
 
   return (
   <div className="mx-auto max-w-xl py-4 sm:py-8">
