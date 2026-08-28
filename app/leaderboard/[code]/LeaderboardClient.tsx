@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { supabase } from "@/lib/supabaseClient";
 import { useSearchParams } from "next/navigation";
+import { useLivePolling } from "@/lib/useLivePolling";
 import StatCard from "@/components/StatCard";
 
 type GameRow = {
@@ -11,6 +12,7 @@ type GameRow = {
   code: string;
   title: string;
   is_locked: boolean;
+  status: "pregame" | "live" | "completed";
 };
 
 type PlayerRow = {
@@ -110,7 +112,7 @@ export default function LeaderboardClient({ code }: { code: string }) {
       // 1) Load game
       const { data: g, error: gErr } = await supabase
         .from("games")
-        .select("id, code, title, is_locked")
+        .select("id, code, title, is_locked, status")
         .eq("code", joinCode)
         .single();
 
@@ -213,20 +215,10 @@ export default function LeaderboardClient({ code }: { code: string }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [joinCode]);
 
-  // Realtime updates (simple)
-  useEffect(() => {
-    const channel = supabase
-      .channel(`leaderboard-${joinCode}`)
-      .on("postgres_changes", { event: "*", schema: "public", table: "answers" }, () => refresh())
-      .on("postgres_changes", { event: "*", schema: "public", table: "players" }, () => refresh())
-      .on("postgres_changes", { event: "*", schema: "public", table: "questions" }, () => refresh())
-      .subscribe();
-
-    return () => {
-      supabase.removeChannel(channel);
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [joinCode]);
+  useLivePolling({
+  enabled: game?.status === "live",
+  onPoll: refresh,
+});
 
   if (loading) {
     return (

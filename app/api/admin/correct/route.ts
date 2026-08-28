@@ -34,20 +34,55 @@ export async function POST(req: Request) {
     }
 
     const value =
-      correctOption == null || String(correctOption).trim() === ""
-        ? null
-        : String(correctOption);
+  correctOption == null || String(correctOption).trim() === ""
+    ? null
+    : String(correctOption);
 
-    const { error } = await supabase
-      .from("questions")
-      .update({ correct_option: value })
-      .eq("id", qid);
+if (!value) {
+  return NextResponse.json(
+    { error: "Missing correctOption" },
+    { status: 400 }
+  );
+}
 
-    if (error) {
-      return NextResponse.json({ error: error.message }, { status: 400 });
-    }
+const { data: existing, error: existingError } = await supabase
+  .from("questions")
+  .select("resolved_at")
+  .eq("id", qid)
+  .single();
 
-    return NextResponse.json({ ok: true });
+if (existingError || !existing) {
+  return NextResponse.json(
+    { error: existingError?.message ?? "Question not found" },
+    { status: 400 }
+  );
+}
+
+const resolvedAt =
+  existing.resolved_at ?? new Date().toISOString();
+
+const { data: updated, error } = await supabase
+  .from("questions")
+  .update({
+    correct_option: value,
+    resolved_at: resolvedAt,
+  })
+  .eq("id", qid)
+  .select("correct_option, resolved_at")
+  .single();
+
+if (error) {
+  return NextResponse.json(
+    { error: error.message },
+    { status: 400 }
+  );
+}
+
+return NextResponse.json({
+  ok: true,
+  correctOption: updated.correct_option,
+  resolvedAt: updated.resolved_at,
+});
   } catch (e: any) {
     return NextResponse.json(
       { error: e?.message ?? "Bad request" },

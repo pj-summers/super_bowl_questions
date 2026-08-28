@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { supabase } from "@/lib/supabaseClient";
+import { useLivePolling } from "@/lib/useLivePolling";
 import QRCode from "qrcode";
 
 type GameRow = {
@@ -20,6 +21,7 @@ type QuestionRow = {
   options: string[];
   sort_order: number;
   correct_option: string | null;
+  resolved_at: string | null;
 };
 
 type PlayerRow = {
@@ -30,6 +32,7 @@ type PlayerRow = {
 type AnswerRow = {
   player_id: string;
   question_id: string;
+  option: string;
 };
 
 type ReadinessRow = {
@@ -49,7 +52,7 @@ async function fetchAllAnswers(questionIds: string[]): Promise<AnswerRow[]> {
   while (true) {
     const { data, error } = await supabase
       .from("answers")
-      .select("player_id, question_id")
+      .select("player_id, question_id, option")
       .in("question_id", questionIds)
       .range(from, from + PAGE_SIZE - 1);
 
@@ -71,7 +74,9 @@ export default function AdminClient({ code }: { code: string }) {
   const searchParams = useSearchParams();
   const adminKey = searchParams.get("key") ?? "";
   const isAdmin = adminKey.length > 0;
-  const [showOnlyUnanswered, setShowOnlyUnanswered] = useState(true);
+  const [questionFilter, setQuestionFilter] = useState<
+  "unresolved" | "resolved" | "all"
+>("unresolved");
 
   const [loading, setLoading] = useState(true);
   const [savingId, setSavingId] = useState<string | null>(null);
@@ -83,6 +88,7 @@ export default function AdminClient({ code }: { code: string }) {
   const [game, setGame] = useState<GameRow | null>(null);
   const [questions, setQuestions] = useState<QuestionRow[]>([]);
   const [readinessRows, setReadinessRows] = useState<ReadinessRow[]>([]);
+  const [allAnswers, setAllAnswers] = useState<AnswerRow[]>([]);
   const [playerFilter, setPlayerFilter] = useState<
     "all" | "complete" | "incomplete"
   >("all");
@@ -92,16 +98,31 @@ export default function AdminClient({ code }: { code: string }) {
   const [removePlayer, setRemovePlayer] = useState<ReadinessRow | null>(null);
   const [showLockConfirm, setShowLockConfirm] = useState(false);
   const [lifecycleWorking, setLifecycleWorking] = useState(false);
+  const [pendingResolution, setPendingResolution] = useState<{
+  questionId: string;
+  prompt: string;
+  option: string;
+  isEdit: boolean;
+} | null>(null);
+  const [editingResultId, setEditingResultId] = useState<string | null>(null);
 
   const totalQuestions = questions.length;
-  const correctEntered = questions.filter(
-    (q) => q.correct_option != null && String(q.correct_option).trim() !== ""
-  ).length;
-  const filteredQuestions = showOnlyUnanswered
-  ? questions.filter(
-      (q) => q.correct_option == null || String(q.correct_option).trim() === ""
-    )
-  : questions;
+  const resolvedQuestions = questions.filter(
+  (q) => q.correct_option != null && String(q.correct_option).trim() !== ""
+);
+
+const unresolvedQuestions = questions.filter(
+  (q) => q.correct_option == null || String(q.correct_option).trim() === ""
+);
+
+const resolvedCount = resolvedQuestions.length;
+
+const filteredQuestions =
+  questionFilter === "resolved"
+    ? resolvedQuestions
+    : questionFilter === "unresolved"
+      ? unresolvedQuestions
+      : questions;
   const totalPlayers = readinessRows.length;
 
 const completePlayers = readinessRows.filter(
@@ -353,7 +374,7 @@ if (!deletedRows || deletedRows.length === 0) {
 
       const { data: qs, error: qErr } = await supabase
         .from("questions")
-        .select("id, prompt, options, sort_order, correct_option")
+        .select("id, prompt, options, sort_order, correct_option, resolved_at")
         .eq("game_id", g.id)
         .order("sort_order", { ascending: true });
 
@@ -366,6 +387,7 @@ if (!deletedRows || deletedRows.length === 0) {
           options: row.options,
           sort_order: row.sort_order,
           correct_option: row.correct_option,
+          resolved_at: row.resolved_at,
         }))
       );
 
@@ -382,6 +404,7 @@ if (playerError) throw playerError;
 const players = (playerData ?? []) as PlayerRow[];
 
 const answerData = await fetchAllAnswers(questionIds);
+setAllAnswers(answerData);
 
 const answeredByPlayer = new Map<string, Set<string>>();
 
@@ -421,6 +444,11 @@ setReadinessRows(
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [joinCode]);
 
+  useLivePolling({
+  enabled: game?.status === "live",
+  onPoll: refresh,
+});
+
   async function setLocked(nextLocked: boolean) {
     if (!game) return;
 
@@ -439,39 +467,79 @@ setReadinessRows(
     await refresh();
   }
 
-  async function setCorrect(questionId: string, correctOption: string | null) {
-    setSavingId(questionId);
-    setError(null);
+ async function confirmResolution() {
+  if (!pendingResolution) return;
 
-    try {
-      // Optimistic update
-      setQuestions((prev) =>
-        prev.map((q) =>
-          q.id === questionId ? { ...q, correct_option: correctOption } : q
-        )
-      );
+  const { questionId, option } = pendingResolution;
 
-      const res = await fetch("/api/admin/correct", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          questionId,
-          correctOption,
-          key: adminKey,
-        }),
-      });
+  setSavingId(questionId);
+  setError(null);
 
-      const json = await res.json();
-      if (!res.ok) throw new Error(json?.error ?? "Failed to set correct answer.");
-    } catch (e: any) {
-      setError(e?.message ?? "Failed to save.");
-      // reload from source of truth if something went wrong
-      await refresh();
-    } finally {
-      setSavingId(null);
+  try {
+    const res = await fetch("/api/admin/correct", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        questionId,
+        correctOption: option,
+        key: adminKey,
+      }),
+    });
+
+    const json = await res.json();
+
+    if (!res.ok) {
+      throw new Error(json?.error ?? "Failed to resolve question.");
     }
+
+    setQuestions((prev) =>
+      prev.map((q) =>
+        q.id === questionId
+          ? {
+              ...q,
+              correct_option: option,
+              resolved_at: json.resolvedAt ?? q.resolved_at,
+            }
+          : q
+      )
+    );
+
+    setPendingResolution(null);
+    setEditingResultId(null);
+  } catch (e: any) {
+    setError(e?.message ?? "Failed to resolve question.");
+    await refresh();
+  } finally {
+    setSavingId(null);
+  }
+}
+function getQuestionCrowdStats(question: QuestionRow) {
+  const questionAnswers = allAnswers.filter(
+    (answer) => answer.question_id === question.id
+  );
+
+  const totalAnswered = questionAnswers.length;
+
+  if (!question.correct_option || totalAnswered === 0) {
+    return {
+      correctCount: 0,
+      totalAnswered,
+      accuracyPercent: 0,
+    };
   }
 
+  const correctCount = questionAnswers.filter(
+    (answer) => answer.option === question.correct_option
+  ).length;
+
+  return {
+    correctCount,
+    totalAnswered,
+    accuracyPercent: Math.round(
+      (correctCount / totalAnswered) * 100
+    ),
+  };
+}
   if (!isAdmin) {
     return (
       <main className="min-h-screen p-6 max-w-2xl mx-auto">
@@ -526,7 +594,7 @@ setReadinessRows(
             {game.title} · Code: <span className="font-mono">{game.code}</span>
           </p>
           <p className="mt-1 text-sm text-gray-600">
-            Correct answers entered: {correctEntered}/{totalQuestions}
+            Resolved: {resolvedCount}/{totalQuestions}
           </p>
           <p className="mt-1 text-sm text-gray-600">
             Submissions: {game.is_locked ? "LOCKED" : "OPEN"}
@@ -819,56 +887,200 @@ setReadinessRows(
     )}
   </div>
 </section>
-      <div className="mt-4 flex items-center justify-between gap-3">
-  <label className="flex items-center gap-2 text-sm">
-    <input
-      type="checkbox"
-      checked={showOnlyUnanswered}
-      onChange={(e) => setShowOnlyUnanswered(e.target.checked)}
-    />
-    Show only unanswered
-  </label>
+<section className="mt-6 sbq-card overflow-hidden">
+  <div className="border-b border-border px-5 py-5 sm:px-6">
+    <p className="sbq-eyebrow">
+      {game.status === "live" ? "Live" : "Scoring"}
+    </p>
 
-  <div className="text-sm text-gray-600">
-    Showing {filteredQuestions.length} of {questions.length}
+    <div className="mt-1 flex flex-col justify-between gap-3 sm:flex-row sm:items-end">
+      <div>
+        <h2 className="text-xl font-bold tracking-tight">
+          Live Control
+        </h2>
+
+        <p className="mt-1 text-sm text-muted">
+          {resolvedCount} of {totalQuestions} questions resolved.
+        </p>
+      </div>
+
+      <button
+        type="button"
+        onClick={() => refresh()}
+        className="sbq-touch-target rounded-xl border border-border bg-surface px-4 py-2 text-sm font-semibold transition-colors hover:bg-surface-subtle"
+      >
+        Refresh
+      </button>
+    </div>
   </div>
-</div>
 
-      <div className="mt-6 space-y-4">
-        {filteredQuestions.map((q, idx) => (
-          <div key={q.id} className="rounded-2xl border p-4">
-            <div className="flex items-start justify-between gap-4">
-              <div>
-                <p className="text-xs text-gray-500">Q{q.sort_order + 1}</p>
-                <p className="mt-1 font-medium">{q.prompt}</p>
+  <div className="border-b border-border px-5 py-4 sm:px-6">
+    <div className="flex flex-wrap gap-2">
+      <button
+        type="button"
+        onClick={() => setQuestionFilter("unresolved")}
+        className={[
+          "rounded-full px-4 py-2 text-sm font-semibold transition",
+          questionFilter === "unresolved"
+            ? "bg-foreground text-background"
+            : "border border-border bg-surface text-muted hover:bg-surface-subtle",
+        ].join(" ")}
+      >
+        Unresolved ({unresolvedQuestions.length})
+      </button>
+
+      <button
+        type="button"
+        onClick={() => setQuestionFilter("resolved")}
+        className={[
+          "rounded-full px-4 py-2 text-sm font-semibold transition",
+          questionFilter === "resolved"
+            ? "bg-foreground text-background"
+            : "border border-border bg-surface text-muted hover:bg-surface-subtle",
+        ].join(" ")}
+      >
+        Resolved ({resolvedQuestions.length})
+      </button>
+
+      <button
+        type="button"
+        onClick={() => setQuestionFilter("all")}
+        className={[
+          "rounded-full px-4 py-2 text-sm font-semibold transition",
+          questionFilter === "all"
+            ? "bg-foreground text-background"
+            : "border border-border bg-surface text-muted hover:bg-surface-subtle",
+        ].join(" ")}
+      >
+        All ({totalQuestions})
+      </button>
+    </div>
+  </div>
+
+        <div className="divide-y divide-border">
+    {filteredQuestions.length === 0 ? (
+      <div className="px-5 py-10 text-center text-sm text-muted sm:px-6">
+        No questions match this filter.
+      </div>
+    ) : (
+      filteredQuestions.map((q) => {
+        const isResolved =
+          q.correct_option != null &&
+          String(q.correct_option).trim() !== "";
+
+        return (
+          <div
+            key={q.id}
+            className={[
+              "px-5 py-5 sm:px-6",
+              isResolved ? "bg-success-soft/30" : "bg-surface",
+            ].join(" ")}
+          >
+            <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+              <div className="min-w-0 flex-1">
+                <div className="flex flex-wrap items-center gap-2">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-muted">
+                    Question {q.sort_order + 1}
+                  </p>
+
+                  <span
+                    className={[
+                      "rounded-full px-2.5 py-1 text-xs font-semibold",
+                      isResolved
+                        ? "bg-success-soft text-success"
+                        : "bg-surface-subtle text-muted",
+                    ].join(" ")}
+                  >
+                    {isResolved ? "Resolved" : "Unresolved"}
+                  </span>
+                </div>
+
+                <p className="mt-2 font-semibold leading-snug">
+                  {q.prompt}
+                </p>
+
+                {isResolved && (() => {
+  const crowd = getQuestionCrowdStats(q);
+
+  return (
+    <div className="mt-3">
+      <p className="text-sm">
+        Correct answer:{" "}
+        <span className="font-semibold text-success">
+          {q.correct_option}
+        </span>
+      </p>
+
+      <p className="mt-1 text-sm text-muted">
+        Crowd accuracy:{" "}
+        <span className="font-semibold text-foreground">
+          {crowd.correctCount}/{crowd.totalAnswered}
+        </span>
+        {" "}· {crowd.accuracyPercent}%
+      </p>
+    </div>
+  );
+})()}
               </div>
+
               {savingId === q.id && (
-                <span className="text-xs text-gray-500">Saving…</span>
+                <span className="shrink-0 text-xs font-medium text-muted">
+                  Saving…
+                </span>
               )}
             </div>
 
-            <div className="mt-3">
-              <select
-                className="w-full rounded-xl border px-3 py-2"
-                value={q.correct_option ?? ""}
-                onChange={(e) =>
-                  setCorrect(q.id, e.target.value === "" ? null : e.target.value)
-                }
-              >
-                <option value="">(No correct answer yet)</option>
-                {q.options.map((opt) => (
-                  <option key={opt} value={opt}>
-                    {opt}
-                  </option>
-                ))}
-              </select>
-
-              <p className="mt-2 text-xs text-gray-500">
-                Set the correct answer when it becomes known. Leaderboard updates live.
-              </p>
-            </div>
-          </div>
+            <div className="mt-4">
+  {!isResolved || editingResultId === q.id ? (
+    <>
+      <div className="grid gap-2 sm:grid-cols-2">
+        {q.options.map((opt) => (
+          <button
+            key={opt}
+            type="button"
+            disabled={savingId === q.id}
+            onClick={() =>
+              setPendingResolution({
+                questionId: q.id,
+                prompt: q.prompt,
+                option: opt,
+                isEdit: isResolved,
+              })
+            }
+            className="sbq-touch-target rounded-xl border border-border bg-surface px-4 py-3 text-left text-sm font-semibold transition-colors hover:border-brand hover:bg-brand-soft disabled:opacity-50"
+          >
+            {opt}
+          </button>
         ))}
+      </div>
+
+      <p className="mt-2 text-xs text-muted">
+        Select the correct answer to review it before resolving.
+      </p>
+    </>
+  ) : (
+    <div className="flex flex-col gap-3">
+  <p className="text-xs text-muted">
+    This question has been resolved.
+  </p>
+
+  <button
+    type="button"
+    onClick={() => setEditingResultId(q.id)}
+    className="sbq-touch-target self-start rounded-xl border border-border bg-surface px-4 py-2 text-sm font-semibold transition-colors hover:bg-surface-subtle"
+  >
+    Edit Result
+  </button>
+</div>
+  )}
+</div>
+          </div>
+        );
+      })
+    )}
+  </div>
+</section>
+
         {showQr && qrDataUrl && (
   <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
     <div className="w-full max-w-sm rounded-2xl border border-border bg-surface p-6 shadow-xl">
@@ -1042,7 +1254,63 @@ setReadinessRows(
     </div>
   </div>
 )}
+      {pendingResolution && (
+  <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+    <div className="w-full max-w-md rounded-2xl border border-border bg-surface p-6 shadow-xl">
+      <p className="sbq-eyebrow">
+  {pendingResolution.isEdit ? "Edit Result" : "Resolve Question"}
+</p>
+
+      <h2 className="mt-1 text-xl font-bold tracking-tight">
+  {pendingResolution.isEdit
+    ? "Confirm result change"
+    : "Confirm correct answer"}
+</h2>
+
+      <p className="mt-4 text-sm font-semibold leading-6">
+        {pendingResolution.prompt}
+      </p>
+
+      <div className="mt-4 rounded-xl border border-success/30 bg-success-soft p-4">
+        <p className="text-xs font-semibold uppercase tracking-wide text-muted">
+          Correct Answer
+        </p>
+
+        <p className="mt-1 text-lg font-bold text-success">
+          {pendingResolution.option}
+        </p>
       </div>
+
+      <p className="mt-4 text-sm leading-6 text-muted">
+        Resolving this question will immediately affect player scores.
+      </p>
+
+      <div className="mt-6 flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+        <button
+          type="button"
+          onClick={() => setPendingResolution(null)}
+          disabled={savingId === pendingResolution.questionId}
+          className="sbq-touch-target rounded-xl border border-border bg-surface px-4 py-3 text-sm font-semibold transition-colors hover:bg-surface-subtle disabled:opacity-50"
+        >
+          Cancel
+        </button>
+
+        <button
+          type="button"
+          onClick={() => void confirmResolution()}
+          disabled={savingId === pendingResolution.questionId}
+          className="sbq-touch-target rounded-xl bg-brand px-4 py-3 text-sm font-semibold text-brand-foreground transition-opacity hover:opacity-90 disabled:opacity-50"
+        >
+          {savingId === pendingResolution.questionId
+  ? "Saving..."
+  : pendingResolution.isEdit
+    ? "Confirm Change"
+    : "Confirm & Resolve"}
+        </button>
+      </div>
+    </div>
+  </div>
+)}
     </main>
   );
 }
